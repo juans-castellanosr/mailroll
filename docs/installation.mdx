@@ -1,0 +1,104 @@
+---
+title: "Installation"
+description: "Requirements, install commands and the optional MJML package."
+icon: "download"
+---
+
+Install mailroll as a local dependency of the project that holds your campaigns. Template plugins import `mailroll` and `mailroll/core`, so the package must resolve from the campaign folders, not only exist as a global command.
+
+## Requirements
+
+- **Node.js 22.18 or newer.** mailroll declares this in its `engines` field. Node.js 22.18 is the first 22.x release that runs TypeScript files without flags, and mailroll relies on that to load `.ts` plugins with no build step.
+- **An integration for the service you send through.** mailroll includes none. To send through a Microsoft 365 mailbox, install the official `@mailroll/outlook` integration (below); test sends, live sends and `mailroll-outlook export-sent` then also need a Microsoft Entra app registration. See [Connect Outlook](/guides/outlook).
+
+## Install
+
+Pick your package manager.
+
+<Tabs>
+  <Tab title="npm">
+    ```bash Terminal
+    npm install mailroll
+    ```
+  </Tab>
+  <Tab title="pnpm">
+    ```bash Terminal
+    pnpm add mailroll
+    ```
+  </Tab>
+</Tabs>
+
+Then install the integration you send through, in the same project, and declare it in `mailroll.json` next to that `package.json`. For Outlook:
+
+<Tabs>
+  <Tab title="npm">
+    ```bash Terminal
+    npm install @mailroll/outlook
+    ```
+  </Tab>
+  <Tab title="pnpm">
+    ```bash Terminal
+    pnpm add @mailroll/outlook
+    ```
+  </Tab>
+</Tabs>
+
+```json mailroll.json
+{ "integrations": ["@mailroll/outlook"] }
+```
+
+Every run checks its connections against the declared integrations, dry runs included; see [Add an integration](/guides/integrations).
+
+Then set `"type": "module"` in your `package.json`, so Node.js treats your plugin files as ES modules. npm ships with Node.js, so this command works whichever package manager you use:
+
+```bash Terminal
+npm pkg set type=module
+```
+
+<Note>
+  Yarn and Bun have been tried as package managers by hand, but they are not covered by the project's automated tests. mailroll itself always runs on Node.js.
+</Note>
+
+## Verify the installation
+
+Run the locally installed CLI from the project folder. Each package manager has its own way to run a dependency's command:
+
+<Tabs>
+  <Tab title="npm">
+    ```bash Terminal
+    npx mailroll --version
+    ```
+  </Tab>
+  <Tab title="pnpm">
+    ```bash Terminal
+    pnpm exec mailroll --version
+    ```
+  </Tab>
+</Tabs>
+
+It prints the installed version number. Replace `--version` with `--help` to list the commands and global options. The rest of these docs write commands with `npx`; with pnpm, run them with `pnpm exec` instead.
+
+## Optional: MJML
+
+`mailroll build-template` compiles a template's `view/template.mjml` into `view/compiled.html`. It needs the [MJML](https://mjml.io) package, which mailroll declares as an optional peer dependency (`mjml` `^5.4.1`). Install it next to mailroll only if you author your email bodies in MJML:
+
+<Tabs>
+  <Tab title="npm">
+    ```bash Terminal
+    npm install mjml
+    ```
+  </Tab>
+  <Tab title="pnpm">
+    ```bash Terminal
+    pnpm add mjml
+    ```
+  </Tab>
+</Tabs>
+
+Without it, every other command works. Only `build-template` fails, with a message that tells you to install `mjml`.
+
+## Next steps
+
+- Preview your first campaign: [Quickstart](/quickstart).
+- Learn the model: [Core concepts](/concepts).
+- Write email bodies in MJML or HTML: [Templates](/guides/templates).

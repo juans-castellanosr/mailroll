@@ -1,0 +1,283 @@
+---
+title: "Templates"
+description: "Write the plugin that validates rows and renders each message, fill placeholders safely, and author the body in HTML or MJML."
+icon: "layout-template"
+---
+
+A template defines one kind of message. Its HTML body is a file; the logic that decides who is a valid recipient and what each one receives is a small plugin you write. This guide covers the plugin contract, placeholders and escaping, raw HTML, inline images and MJML. The folder layout is in [Campaigns](/guides/campaigns).
+
+## How a plugin is used
+
+mailroll loads the first of `code/plugin.ts`, `code/plugin.mts`, `code/plugin.js` and `code/plugin.mjs` that exists in the template folder, and uses its default export. The plugin has two parts, each created from the template's settings:
+
+- **The validator** turns one CSV row into a recipient, or rejects it with reasons. mailroll runs it over every row while preparing a run, and also whenever `mailroll status` or the menu counts a list. Rejected rows are counted and never sent.
+- **The renderer** produces the subject and HTML body for one valid recipient. mailroll creates it once per template while preparing a run, then calls it for each recipient just before that recipient's message is sent.
+
+Because both are created during preparation, a missing file or a wrong setting that your plugin checks for stops the run before anything is sent. `mailroll status` and the menu create them too, so the same error appears there as a problem with the template.
+
+## The plugin contract
+
+Create the default export with `definePlugin` from `mailroll/core`. Its type, shown here as a shape rather than runnable code, is:
+
+```typescript
+definePlugin<T extends Recipient>(
+  createRenderer: (template: Template) => Promise<TemplateRenderer<T>>,
+  createValidator: (template: Template) => RecipientValidator<T>,
+): TemplatePlugin
+
+interface TemplateRenderer<T> {
+  // RenderedEmail: { subject, html, inlineAttachments? }
+  render(recipient: T): RenderedEmail;
+}
+
+interface RecipientValidator<T> {
+  validate(
+    record: Readonly<Record<string, string>>,
+  ): ValidationOutcome<T>;
+}
+```
+
+- `T` is your recipient type. It must include `email`, typed as `EmailAddress`, which you obtain from `parseEmailAddress`.
+- `createRenderer` is asynchronous, so it can read files. It must return a promise; an `async` function does that.
+- `createValidator` is synchronous.
+- The `template` argument is the template's settings. Besides the id and folder paths, it carries `context`, `subjectTemplate`, `cc`, `ccPolicy`, `connectionIds`, `pacing` and `saveToSentItems` from `template.config.json`.
+
+The [Quickstart](/quickstart) plugin is a complete example of both parts.
+
+A plugin written without `definePlugin` that sends through its run dependencies itself finds the connections of a dry run in `deps.providers`, and those of a test or live run in `deps.senders`, as prepared sender integrations. A plugin made with `definePlugin` passes both on to the engine and needs no change.
+
+## Validate rows
+
+`validate` receives one CSV row: an object whose keys are the column names and whose values are the cells, as strings, untrimmed. It returns one of two outcomes, both from `mailroll/core`:
+
+- `valid(recipient)`: the row becomes this recipient.
+- `invalid(reasons)`: the row is skipped; `reasons` is a list of strings explaining why.
+
+Two helpers keep validators short:
+
+- `parseEmailAddress(value)` checks and normalizes an address. It returns `{ ok: true, value }` with the address, or `{ ok: false, reasons }`. The rules are in [Email addresses](/reference/email-addresses). The examples pass `row['email'] ?? ''` because, with strict index checking, a cell's type includes `undefined`; mailroll requires the `email` column, so the fallback only satisfies the type checker.
+- `requiredField(raw, label, reasons)` trims a cell and returns it. When the result is empty, it also adds `"<label> is missing or empty"` to `reasons`. Collect every problem in `reasons` and return `invalid(reasons)` if any were added, so one rejected row reports all of its problems at once.
+
+After your validator accepts a row, mailroll checks the returned `email` again. If it is not a valid address, the row is skipped with `the template validator returned an invalid email: …`. If an earlier row already has the same address, ignoring case, it is skipped as a duplicate.
+
+## Render messages
+
+`render(recipient)` returns the message for one recipient: an object with `subject`, `html` and, optionally, `inlineAttachments`. Most plugins build it with `renderWithMarkers` from `mailroll/core`, which takes:
+
+<ResponseField name="template" type="string" required>
+  The HTML body, usually read once in `createRenderer` with `loadCompiledTemplate(template)` from `mailroll`.
+</ResponseField>
+
+<ResponseField name="subject" type="string" required>
+  The subject line. It is returned unchanged; see [Subject lines](#subject-lines).
+</ResponseField>
+
+<ResponseField name="variables" type="Record<string, string>" required>
+  The value of each placeholder in the body. Values are HTML-escaped.
+</ResponseField>
+
+<ResponseField name="rawMarkers" type="Record<string, string>">
+  Markers in the body to replace with HTML, without escaping. See [Raw HTML](#raw-html).
+
+  **When omitted:** no raw replacement.
+</ResponseField>
+
+<ResponseField name="inlineAttachments" type="InlineAttachment[]">
+  Images embedded in the message. See [Inline images](#inline-images).
+
+  **When omitted:** the message has no attachments. An empty array is treated the same way.
+</ResponseField>
+
+`loadCompiledTemplate` reads `view/compiled.html`. If the file is missing it fails with `compiled template not found at <path>`, and the message suggests compiling `view/template.mjml` with `mailroll build-template`.
+
+If `render` throws, the list stops at that recipient: messages already sent stay sent, the rest of the list is reported as not attempted, and any later lists in the same run do not start. A dry run renders every message, so run one before a live send to catch these errors.
+
+## Placeholders and escaping
+
+A placeholder is a name between double braces: `{{firstName}}`. Spaces inside the braces are allowed (`{{ firstName }}`), and names may contain only ASCII letters (`A`–`Z`, `a`–`z`), digits and `_`.
+
+- Every placeholder in the body must have a value in `variables`. A missing value fails with `unresolved template placeholder "{{name}}"`; it never becomes an empty string.
+- Values are HTML-escaped: `&`, `<`, `>`, `"` and `'` become entities. A CSV cell cannot inject markup into the message.
+- Anything else between double braces, such as `{{first-name}}` or `{{prénom}}`, is not a placeholder. It stays in the message exactly as written, with no error. Check your previews for leftover braces.
+
+## Subject lines
+
+The subject is not a template. mailroll never reads `subjectTemplate` from the configuration; it is only a value your plugin can read from `template.subjectTemplate`, and `renderWithMarkers` returns the `subject` you pass without substituting anything.
+
+To personalize the subject, build the string in `render`. This renderer, written as a standalone function, puts the recipient's first name in the subject:
+
+```ts
+import { loadCompiledTemplate } from 'mailroll';
+import {
+  type Recipient,
+  renderWithMarkers,
+  type Template,
+  type TemplateRenderer,
+} from 'mailroll/core';
+
+interface Member extends Recipient {
+  readonly firstName: string;
+}
+
+export async function createRenderer(
+  template: Template,
+): Promise<TemplateRenderer<Member>> {
+  const html = await loadCompiledTemplate(template);
+
+  return {
+    render: (member) =>
+      renderWithMarkers({
+        template: html,
+        subject: `Welcome, ${member.firstName}`,
+        variables: { firstName: member.firstName },
+      }),
+  };
+}
+```
+
+Do not run the subject through `substitute` or `escapeHtml`. Both escape for HTML, and the subject is plain text, so a name such as `O'Brien` would arrive as `O&#39;Brien`.
+
+## Raw HTML
+
+Sometimes a value must be HTML you build yourself, such as a list with one item per step. Put a marker in the body where the HTML goes and pass the HTML in `rawMarkers`. mailroll replaces every occurrence of each marker after filling the placeholders, and inserts the HTML exactly as given.
+
+Because nothing escapes a raw marker's value, you escape every piece of data inside it with `escapeHtml`. This example checks that the marker exists, then renders a list of steps:
+
+```ts
+import {
+  assertMarkersPresent,
+  escapeHtml,
+  renderWithMarkers,
+} from 'mailroll/core';
+
+const STEPS = '<!-- STEPS -->';
+const html = '<p>Hi {{firstName}},</p>\n<!-- STEPS -->';
+const steps = ['Complete your profile', 'Invite your team'];
+const items = steps
+  .map((step) => `<li>${escapeHtml(step)}</li>`)
+  .join('');
+
+assertMarkersPresent(html, [STEPS]);
+
+const message = renderWithMarkers({
+  template: html,
+  subject: 'Your next steps',
+  variables: { firstName: 'Ada' },
+  rawMarkers: {
+    [STEPS]: `<ul>${items}</ul>`,
+  },
+});
+```
+
+- `assertMarkersPresent(html, markers)` fails with `compiled template is missing the marker "<marker>"` when a marker is not in the body. Call it in `createRenderer`, so a body that lost its marker stops the run before anything is sent instead of silently leaving the section out.
+- Use HTML comments in upper case with underscores, such as `<!-- STEPS -->`, as markers. Placeholder values are escaped before markers are replaced, so an escaped value can never contain `<!--` and be mistaken for a marker. `mailroll build-template` also checks that markers of this form survive MJML compilation.
+
+## Inline images
+
+An inline image travels inside the message as an attachment and is shown where the HTML references it with `cid:`. Each attachment has four fields:
+
+- `cid`: the content id. The body refers to it as `<img src="cid:logo">`.
+- `filename`: the attachment's file name.
+- `contentType`: the media type, for example `image/png`.
+- `contentBase64`: the file content, Base64-encoded.
+
+The template exposes `template.assetsDir`, the path of its `view/assets/` folder, as a place to keep such files. mailroll reads nothing from it; your plugin does. This plugin loads a logo once while preparing and attaches it to every message:
+
+```ts
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { loadCompiledTemplate } from 'mailroll';
+import {
+  definePlugin,
+  type InlineAttachment,
+  invalid,
+  parseEmailAddress,
+  type Recipient,
+  renderWithMarkers,
+  valid,
+} from 'mailroll/core';
+
+export default definePlugin<Recipient>(
+  async (template) => {
+    const html = await loadCompiledTemplate(template);
+    const logo: InlineAttachment = {
+      cid: 'logo',
+      filename: 'logo.png',
+      contentType: 'image/png',
+      contentBase64: (
+        await readFile(join(template.assetsDir, 'logo.png'))
+      ).toString('base64'),
+    };
+
+    return {
+      render: () =>
+        renderWithMarkers({
+          template: html,
+          subject: 'Welcome to Acme',
+          variables: {},
+          inlineAttachments: [logo],
+        }),
+    };
+  },
+  () => ({
+    validate: (row) => {
+      const email = parseEmailAddress(row['email'] ?? '');
+
+      return email.ok
+        ? valid({ email: email.value })
+        : invalid(email.reasons);
+    },
+  }),
+);
+```
+
+Dry-run previews contain only the HTML, so `cid:` images do not appear in them. Send a test message to see them.
+
+## Write the body in MJML
+
+[MJML](https://mjml.io) is a markup language that compiles to email-safe HTML. To use it, write `view/template.mjml` with the same placeholders and markers, and compile it to `view/compiled.html`. This needs the optional `mjml` package; see [Installation](/installation).
+
+```html campaigns/acme/onboarding/templates/welcome/view/template.mjml wrap
+<mjml>
+  <mj-body>
+    <mj-section>
+      <mj-column>
+        <mj-text>Hi {{firstName}},</mj-text>
+        <mj-text>Your {{plan}} plan is ready.</mj-text>
+        <mj-button href="{{portalUrl}}">Open your account</mj-button>
+      </mj-column>
+    </mj-section>
+  </mj-body>
+</mjml>
+```
+
+Compile it by passing the template folder:
+
+```bash Terminal wrap
+npx mailroll build-template campaigns/acme/onboarding/templates/welcome
+```
+
+- MJML validates the file strictly. Any MJML error fails the command with exit code `1` and `MJML reported N error(s) in <path>:`, followed by MJML's own messages, and `compiled.html` is not written.
+- Every `{{…}}` placeholder and every `<!-- UPPER_CASE -->` marker in the source must still be in the output; otherwise the command fails with `did not survive MJML compilation`, naming them.
+- On success it overwrites `view/compiled.html` and reports the paths and size on stderr.
+
+`compiled.html` is what mailroll sends. Compile again after every change to the MJML file, and commit both files if you keep them in version control. The command options are in [mailroll build-template](/cli/build-template).
+
+## TypeScript plugins without a build
+
+Node.js runs `.ts` and `.mts` plugins directly by removing the type annotations, so there is no compile step. Two rules follow from how that works:
+
+- Use only TypeScript syntax that can be removed without changing behavior. `enum`, `namespace` and constructor parameter properties are not supported.
+- Import your own files with their extension, for example `./format-date.ts`.
+
+Import mailroll's browser-safe API from `mailroll/core`, and Node-only helpers such as `loadCompiledTemplate` from `mailroll`.
+
+<Warning>
+  A plugin is code that mailroll runs with your permissions every time it lists, checks or sends a campaign. Only keep campaigns from sources you trust in your campaigns folder.
+</Warning>
+
+## Next steps
+
+- Configure the template's settings: [Template configuration](/reference/configuration#template-configuration).
+- Preview and test the result: [Sending](/guides/sending).
+- Use the same rendering in a browser: [Browser](/sdk/browser).

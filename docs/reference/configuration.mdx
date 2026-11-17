@@ -1,0 +1,315 @@
+---
+title: "Configuration files"
+description: "Every field of campaign.config.json, connection files and template.config.json, with defaults, constraints and how fields interact."
+icon: "settings"
+---
+
+A campaign is configured by three kinds of JSON files: one `campaign.config.json`, one file per connection in `connections/`, and one `template.config.json` per template. This page is the field-by-field reference. To build a campaign step by step, follow [Create a campaign](/guides/campaigns).
+
+## How mailroll reads configuration
+
+`send`, `status`, `mailroll-outlook export-sent`, the menu and the SDK's `runSelection`, `getCampaignStatus` and `discoverCampaigns` load every campaign under the campaigns folder (`campaigns` by default, or `--campaigns <dir>`; `campaignsRoot` in the SDK). `build-template` is the exception: it reads only the template folder you give it. The same rules apply to all three file kinds:
+
+- **Unknown keys are rejected.** A misspelled field is an error, never silently ignored.
+- **Errors name the file and the field.** Schema errors start with `invalid campaign config in <folder>`, `invalid connection <path>` or `invalid template config <path>`, followed by `<field>: <reason>` for each problem. A missing file reads `cannot read <path>`, and malformed JSON reads `invalid JSON in <path>`.
+- **One invalid file stops every command that loads campaigns.** Because those commands load the whole campaigns folder, a broken file in any campaign makes them fail until you fix it, even when you work with another campaign.
+- **Addresses are validated and normalized** with the rules in [Email addresses](/reference/email-addresses).
+
+The files sit in this layout:
+
+<Tree>
+  <Tree.Folder name="campaigns" defaultOpen>
+    <Tree.Folder name="acme" defaultOpen>
+      <Tree.Folder name="onboarding" defaultOpen>
+        <Tree.File name="campaign.config.json" />
+        <Tree.Folder name="connections" defaultOpen>
+          <Tree.File name="outlook-1.json" />
+        </Tree.Folder>
+        <Tree.Folder name="templates" defaultOpen>
+          <Tree.Folder name="welcome" defaultOpen>
+            <Tree.Folder name="config" defaultOpen>
+              <Tree.File name="template.config.json" />
+            </Tree.Folder>
+          </Tree.Folder>
+        </Tree.Folder>
+      </Tree.Folder>
+    </Tree.Folder>
+  </Tree.Folder>
+</Tree>
+
+For every other file in a campaign, see [Files and folders](/reference/files).
+
+## Campaign configuration
+
+`campaign.config.json` sits at the root of the campaign folder, `<campaigns>/<group>/<name>/`. The campaign id is `<group>/<name>`, taken from the folder names, not from this file. The file is required: a campaign folder without it fails with `cannot read <path>`.
+
+This is the only form of the file, because it has a single field:
+
+```json campaigns/acme/onboarding/campaign.config.json
+{
+  "displayName": "Acme onboarding"
+}
+```
+
+<ResponseField name="displayName" type="string" required>
+  Human-readable campaign name, shown in the menu and in `mailroll status`.
+
+  **Constraints:** at least one character.
+</ResponseField>
+
+## Connection configuration
+
+A connection is a Microsoft 365 mailbox the campaign can send from. Each connection is one `.json` file in the campaign's `connections/` folder. mailroll reads every `.json` file there in name order; the file name itself has no meaning, only the `id` inside it does. A campaign without a `connections/` folder has no connections, so none of its templates can be sent.
+
+A minimal connection has the three required fields:
+
+```json campaigns/acme/onboarding/connections/outlook-1.json
+{
+  "id": "outlook-1",
+  "kind": "outlook",
+  "mailbox": "sender@example.com"
+}
+```
+
+The complete form adds the optional label:
+
+```json campaigns/acme/onboarding/connections/outlook-1.json
+{
+  "id": "outlook-1",
+  "kind": "outlook",
+  "mailbox": "sender@example.com",
+  "displayName": "Onboarding sender"
+}
+```
+
+<ResponseField name="id" type="string" required>
+  Identifies the connection. Templates list it in `connectionIds`, you pass it to `--connection`, and it is part of the [connection secret names](/reference/environment#connection-secrets) and of the token cache path.
+
+  **Values:** letters, digits, `_` and `-` only.
+
+  **Constraints:** unique within the campaign. Two ids that differ only in punctuation, such as `outlook-1` and `outlook_1`, are also rejected, because they would share the same environment variables and token cache (`connection id "…" collides with another after normalization; use a distinct id`).
+</ResponseField>
+
+<ResponseField name="kind" type="string" required>
+  The provider that sends the mail.
+
+  **Values:** `"outlook"` (Microsoft Graph). It is the only provider.
+</ResponseField>
+
+<ResponseField name="mailbox" type="string" required>
+  The address messages are sent from.
+
+  **Constraints:** a valid address under the [email address rules](/reference/email-addresses). When you sign in, the Microsoft account must be this mailbox (compared case-insensitively); signing in as another account fails with `signed in as …, but connection "…" sends as …; sign in with that mailbox`.
+</ResponseField>
+
+<ResponseField name="displayName" type="string">
+  A label for your own reference. mailroll accepts and loads it, but the CLI and the menu do not show it.
+
+  **When omitted:** the connection has no label.
+
+  **Constraints:** at least one character when present.
+</ResponseField>
+
+## Template configuration
+
+Each template folder, `templates/<id>/`, has a `config/template.config.json`. The template id is the folder name. The file is required.
+
+A minimal template config sets the four required fields:
+
+```json campaigns/acme/onboarding/templates/welcome/config/template.config.json
+{
+  "ccPolicy": "forbidden",
+  "connectionIds": ["outlook-1"],
+  "context": {}
+}
+```
+
+The complete form uses every field. The `pacing` values shown are the defaults:
+
+```json campaigns/acme/onboarding/templates/welcome/config/template.config.json
+{
+  "ccPolicy": "optional",
+  "connectionIds": ["outlook-1", "outlook-2"],
+  "subjectTemplate": "Welcome to Acme",
+  "context": {
+    "portalUrl": "https://example.com/start",
+    "supportEmail": "help@example.com"
+  },
+  "cc": ["records@example.com"],
+  "saveToSentItems": true,
+  "pacing": {
+    "delayBetweenSendsMs": 250,
+    "maxRetries": 3,
+    "baseBackoffMs": 500,
+    "maxBackoffMs": 15000,
+    "maxRetryAfterMs": 900000,
+    "maxThrottleWaitMs": 3600000
+  }
+}
+```
+
+There is no field that selects a CSV file. The list is chosen per run; see [Create a campaign](/guides/campaigns).
+
+<ResponseField name="ccPolicy" type="string" required>
+  Whether messages of this template may, or must, carry a CC.
+
+  **Values:**
+  - `"forbidden"`: no CC is ever added. Use it when a copy would expose one recipient's message to a third party.
+  - `"optional"`: a CC is allowed but not needed.
+  - `"required"`: a live send needs at least one CC. Dry runs and test sends do not enforce it.
+
+  See [CC policy and CC addresses](#cc-policy-and-cc-addresses) for how it combines with `cc`, `--cc` and prompts.
+</ResponseField>
+
+<ResponseField name="connectionIds" type="string[]" required>
+  The connections this template may send through.
+
+  **Constraints:** at least one entry. Every entry must be the `id` of a connection in the same campaign, otherwise loading fails with `template "…" references unknown connection "…"`.
+
+  A run chooses which connections to use (`--connection` or the SDK's `connectionIds`). Every selected connection must be listed here, otherwise the run fails before sending with `template "…" does not declare connection "…" (it declares: …)`. When several connections are selected, recipients are distributed among them in turn and each connection sends its share in parallel.
+</ResponseField>
+
+<ResponseField name="context" type="object" required>
+  Fixed values for this template, such as URLs or a support address. mailroll passes them to your plugin as `template.context`; it does not insert them into the email by itself. Your plugin decides how to use them, for example as placeholder values.
+
+  **Values:** an object whose values are all strings. Use `{}` when you have none.
+
+  **Constraints:** non-string values, such as numbers or booleans, are rejected.
+</ResponseField>
+
+<ResponseField name="subjectTemplate" type="string">
+  A subject line for your plugin to read as `template.subjectTemplate`.
+
+  mailroll itself never reads this field. In particular, it is **not substituted automatically**: `renderWithMarkers` returns the subject unchanged, so `{{ placeholders }}` in it stay literal unless your plugin replaces them. See [Templates](/guides/templates).
+
+  **When omitted:** `template.subjectTemplate` is `undefined`. Whether that is an error is up to your plugin; the example plugin in the quickstart fails with a `TemplateRenderError` when it is missing.
+
+  **Constraints:** at least one character when present.
+</ResponseField>
+
+<ResponseField name="cc" type="string[]">
+  Default CC addresses for every message of this template.
+
+  **When omitted:** there is no default CC. A run then takes the CC from `--cc` or the SDK selection, or asks for one; see [CC policy and CC addresses](#cc-policy-and-cc-addresses).
+
+  **Constraints:** at least one address when present; each must be valid; the same address may not appear twice (compared case-insensitively); not allowed with `"ccPolicy": "forbidden"` (`"cc" is set but ccPolicy is "forbidden"`).
+</ResponseField>
+
+<ResponseField name="saveToSentItems" type="boolean" default="false">
+  Whether Microsoft Graph keeps a copy of each sent message in the mailbox's Sent Items folder. mailroll passes the value to Graph's `sendMail` on every request.
+
+  **When omitted:** `false`. mailroll always sends the value explicitly, so this is not Microsoft's own default.
+
+  With `false`, the messages do not appear in Sent Items, so [`mailroll-outlook export-sent`](/guides/export-sent) cannot list them when you need to check an uncertain send. Set it to `true` if you want that safety net.
+</ResponseField>
+
+<ResponseField name="pacing" type="object">
+  Speed and retry limits for test and live sends. See [Pacing](#pacing).
+
+  **When omitted:** every pacing field takes its default.
+</ResponseField>
+
+## Pacing
+
+`pacing` controls how fast a template sends and how long mailroll keeps trying when Microsoft Graph refuses or delays a message. It applies to test and live sends; a dry run only renders, so it never waits.
+
+`pacing` can be partial. Every field you leave out takes its default, so this object changes only the delay and keeps the five other defaults:
+
+```json Partial pacing
+{
+  "pacing": {
+    "delayBetweenSendsMs": 1000
+  }
+}
+```
+
+These fields describe limits. For how retries, throttling waits and uncertain outcomes behave during a send, see [Retries and throttling](/guides/sending#retries-and-throttling).
+
+<ResponseField name="delayBetweenSendsMs" type="integer" default="250">
+  Pause, in milliseconds, between two messages sent through the same connection. There is no pause before the first message. Connections send in parallel, so each one keeps its own pace.
+
+  **When omitted:** `250`.
+
+  **Constraints:** an integer, `0` or more. `0` disables the pause.
+</ResponseField>
+
+<ResponseField name="maxRetries" type="integer" default="3">
+  How many times a message is retried after a temporary network failure that happened before the request reached Microsoft, such as a DNS or connection error. Throttling waits do not count against it. Failures that might have been delivered (uncertain), authentication failures and permanent rejections are never retried.
+
+  **When omitted:** `3`.
+
+  **Constraints:** an integer, `0` or more. `0` disables these retries.
+</ResponseField>
+
+<ResponseField name="baseBackoffMs" type="integer" default="500">
+  Base delay, in milliseconds, for retries after a temporary failure. Each retry waits a random time between zero and `baseBackoffMs × 2^n`, capped by `maxBackoffMs`. It is also the base for throttling waits when Microsoft does not say how long to wait; those waits start at no less than 1 second.
+
+  **When omitted:** `500`.
+
+  **Constraints:** an integer greater than `0`.
+</ResponseField>
+
+<ResponseField name="maxBackoffMs" type="integer" default="15000">
+  Upper limit, in milliseconds, of a single retry delay after a temporary failure.
+
+  **When omitted:** `15000` (15 seconds).
+
+  **Constraints:** an integer greater than `0`.
+</ResponseField>
+
+<ResponseField name="maxRetryAfterMs" type="integer" default="900000">
+  Upper limit, in milliseconds, of a single wait when Microsoft throttles the mailbox (HTTP 429, or 503 with a readable `Retry-After` header: a number of seconds or an HTTP date).
+
+  **When omitted:** `900000` (15 minutes).
+
+  **Constraints:** an integer greater than `0`.
+</ResponseField>
+
+<ResponseField name="maxThrottleWaitMs" type="integer" default="3600000">
+  Total time, in milliseconds, one message may spend waiting on throttling. When the next wait would exceed it, the message is recorded as failed with a message ending in `still throttled after waiting N s (limit M s)`.
+
+  **When omitted:** `3600000` (1 hour).
+
+  **Constraints:** an integer greater than `0`.
+</ResponseField>
+
+## CC policy and CC addresses
+
+The CC of each list is the first of these that is set:
+
+1. The CC given for that list (in the SDK, `cc` on the target).
+2. The CC given for the whole run: `--cc`, or `cc` on the SDK selection. An empty value (`--cc ""` or `cc: []`) counts as set and means "no CC", so it also overrides the template's default.
+3. The template's `cc` field.
+4. Otherwise mailroll asks once for the whole run: an interactive CLI shows a picker with the `CC_RECIPIENT` addresses plus free text, and the SDK calls your `resolveCc` function. Lists with `"ccPolicy": "forbidden"` are never given the answer, and are never the reason to ask. Without a terminal, the CLI cannot ask and fails with `no --cc given and no terminal to ask for one; …`, in every mode, so pass `--cc` in scripts.
+
+`ccPolicy` then decides whether the result is accepted:
+
+| `ccPolicy` | A CC is present | No CC in a live send |
+| --- | --- | --- |
+| `forbidden` | Error: `does not allow CC` | Sent without CC |
+| `optional` | Sent with the CC | Sent without CC |
+| `required` | Sent with the CC | Error before sending |
+
+The "no CC" error for `required` reads `template "…" requires at least one CC for a live send — pass --cc …`, for example after `--cc ""` or an SDK `resolveCc` that returns no address. When the CLI asks interactively for a live run that includes a `required` list, an empty answer stops the run at the prompt with `a CC is required for a live send — select at least one saved address or type a new one` (exit code `2`, while the template error exits with `1`). Dry runs and test sends never enforce `required`. All of these errors happen while the run is prepared, before any message is sent. A run-level CC also applies to a `forbidden` template in the same run, so passing `--cc` with an address for a selection that includes one fails; choose CC per list in that case.
+
+<Warning>
+  CC addresses receive real copies in test mode too. Only dry runs keep the CC inside the preview files.
+</Warning>
+
+### When the provider rejects a CC
+
+Some integrations report each recipient separately and can tell mailroll that the provider accepted the message for the main recipient but rejected a CC address. The Outlook integration reports the message as a whole and never does. When it happens:
+
+| `ccPolicy` when the message was sent | Main recipient | Run summary | Exit code |
+| --- | --- | --- | --- |
+| `optional` | `sent`; not sent again | A note; not an attention item | `0`, unless something else needs attention |
+| `required` | `sent`; not sent again | `CC REJECTED (required)`; an attention item `cc-rejected` | `1` |
+
+The main recipient is never put back in the queue for a rejected CC: the provider accepted their message, and resending it to them to reach the CC would duplicate it. Send the missing copy by other means if you need it. In a live run, the history records the rejected addresses and the policy in force when the message was sent; changing `ccPolicy` later does not change that record. A test send reports the rejection but records nothing. See [Rejected CC](/guides/history#rejected-cc).
+
+## Related
+
+- [Create a campaign](/guides/campaigns)
+- [Templates](/guides/templates)
+- [Environment variables](/reference/environment)
+- [Files and folders](/reference/files)

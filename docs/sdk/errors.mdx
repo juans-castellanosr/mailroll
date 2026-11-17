@@ -1,0 +1,249 @@
+---
+title: "Errors"
+description: "Every error class mailroll throws, when it is thrown, what it carries, how to handle it, and which CLI exit code it leads to."
+icon: "triangle-alert"
+---
+
+mailroll reports problems in two different ways. Problems with a **single recipient** (a refused message, an uncertain send, a rejected row) are results in the run report, not exceptions; see [Results](/sdk/nodejs). Problems that stop **a list or the whole run** are thrown as the error classes on this page.
+
+## Error classes
+
+Every error mailroll throws on purpose extends the abstract class `MailrollError`, which extends `Error`. Each instance's `name` is its class name, and errors that wrap another one keep it in the standard `cause` property.
+
+```text Class hierarchy
+Error
+└── MailrollError
+    ├── ConfigError
+    ├── DataSourceError
+    ├── TemplateRenderError
+    ├── AuthError
+    │   └── SignInRequiredError
+    ├── SendError
+    ├── SendCancelledError
+    ├── StatePersistenceError
+    ├── RunCancelledError
+    ├── TemplateRunError
+    └── RunInterruptedError
+```
+
+All of them are exported by `mailroll`. All except `RunInterruptedError` are also exported by `mailroll/core`.
+
+<ResponseField name="ConfigError" type="class">
+  Something about the campaign, the selection or the environment is wrong, and the run cannot go on.
+
+  **Thrown when:** a configuration file is missing, is not valid JSON or has invalid or unknown fields; ids collide; the selection is malformed or names a campaign, template, connection or CSV that does not exist; a connection secret is missing; the CC breaks the template's `ccPolicy`; a plugin file is missing or has no valid default export; a state file is damaged; another run holds a list's lock, is recovering it, or left an unfinished recovery behind; you call `append` or `compact` on a `FileStateStore` that does not hold the list's lock, did not load the list after taking it, or has lost the lock, or the write is refused because a v1 history cannot be upgraded, its backup already exists with other content, or the journal disappeared during the run or appeared before the store's first write (inside `runTemplate` and `runSelection`, these refusals reach you as the `cause` of a `StatePersistenceError` instead); a second live run of a list starts on the same store while the first is running; or a CSV changed after it was reviewed or prepared.
+
+  **Handle it:** show the message to an operator. It names the file, field or list involved. Fix the cause and run again.
+</ResponseField>
+
+<ResponseField name="DataSourceError" type="class">
+  Data could not be read.
+
+  **Thrown when:** a CSV cannot be read, is not valid UTF-8, cannot be parsed or has a bad header (empty, duplicate or missing `email` column); or `mailroll-outlook export-sent` cannot read Sent Items from Microsoft Graph (a network error, an unexpected response, or too many pages).
+
+  **Handle it:** fix the file named in the message.
+</ResponseField>
+
+<ResponseField name="TemplateRenderError" type="class">
+  A template could not produce a message.
+
+  **Thrown when:** a `{{ placeholder }}` has no value (`unresolved template placeholder "{{…}}"`); a raw marker is missing from the HTML; `view/compiled.html` does not exist; MJML compilation fails in `build-template`; or your plugin throws it.
+
+  **Handle it:** fix the template or the plugin. During a run it does not reach you directly: it stops the list and arrives as the `cause` of a `TemplateRunError`.
+</ResponseField>
+
+<ResponseField name="AuthError" type="class">
+  Signing in to Microsoft failed.
+
+  **Thrown when:** a saved sign-in cannot be refreshed; the account that signed in is not the connection's `mailbox`; a device-code sign-in returns no token; or Microsoft Graph refuses `mailroll-outlook export-sent` (for example `… is Mail.ReadBasic granted?`).
+
+  **Handle it:** sign in again with the right account, or fix the Entra app's permissions. See [Connect Outlook](/guides/outlook). A token that stops working in the middle of sending is not thrown: that connection's remaining recipients are reported as `not-attempted`.
+</ResponseField>
+
+<ResponseField name="SignInRequiredError" type="class">
+  A subclass of `AuthError`: a person has to sign in, and the run was not allowed to ask.
+
+  **Thrown when:** `signIn: 'cached-only'` is set (always the case for a CLI without a terminal) and a connection has no saved sign-in or it has expired. The message reads `<no saved sign-in | the saved sign-in has expired> for <mailbox> (connection "<id>"); run mailroll once in a terminal to sign in`.
+
+  **Handle it:** sign in once interactively, then retry. Nothing was sent: all connections are signed in before any message.
+</ResponseField>
+
+<ResponseField name="SendError" type="class">
+  One message could not be sent. It carries:
+
+  - `category`: `'transient'`, `'throttled'`, `'permanent'`, `'auth'` or `'uncertain'`. It decides whether the message is retried, recorded as failed or uncertain, or quarantines the connection.
+  - `retryAfterMs` (optional): how long Microsoft asked to wait, when it said.
+
+  **Thrown when:** an email provider fails to send. `runSelection` and `runTemplate` catch it and turn it into a result for that recipient, so you meet it only when you implement or call an `EmailProvider` yourself. Throw it from a custom provider with the right category. A `SendError` from another installed copy of mailroll is recognized by its name and category. Any other error, or a `SendError` with an unknown category, is recorded as `uncertain`, because mailroll cannot tell whether the message went out.
+</ResponseField>
+
+<ResponseField name="SendCancelledError" type="class">
+  A send was abandoned because the run was stopped while the message waited for a retry. Like `SendError`, the engine turns it into a result (`not-attempted`), so `runSelection` never throws it. Only the cancellation raised by mailroll's own retry wait counts as not sent: a `SendCancelledError` thrown by a custom provider is recorded as `uncertain`, like any other unrecognized error.
+</ResponseField>
+
+<ResponseField name="StatePersistenceError" type="class">
+  The send history of a live run could not be written to disk. It carries:
+
+  - `recipient`: the address being recorded when writing failed, or `undefined` if the failure happened while saving the list's final snapshot.
+
+  **Thrown when:** appending to the journal or writing the snapshot fails during `runTemplate` or `runSelection`. The list stops at once. The original error is kept as `cause`, and its name and message end this error's message. It can come from the disk, for example because the disk is full or the folder is not writable, or from the store's refusal to write without the list's lock: a `ConfigError` reading `the send state of "<template>" · <file.csv> can only be written by the store that holds its lock and loaded it after taking it (<reason>); nothing was written`, because the lock file was deleted, taken over by another run or could not be read during the run, or because your own code runs a `FileStateStore` without its lock. When the lock is lost while an intent is being written, the intent stays in the journal and the cause reads `the intent to send to <address> was written to the send state of "<template>" · <file.csv>, but right after it this run could no longer confirm that it holds its lock (<reason>); nothing was sent to <address>, and the history now reads it as uncertain`, at the `before sending to …` stage. When the lock is lost while the store prepares the history files for the list's first write, the cause reads `the send state of "<template>" · <file.csv> can only be written by the store that holds its lock, and while preparing the history files this run could no longer confirm that it holds it (<reason>); it stopped before changing them further`. When it is lost between writing the snapshot and deleting the journal, the cause reads `the snapshot of the send state of "<template>" · <file.csv> was written, but right after it this run could no longer confirm that it holds its lock (<reason>); the journal was kept, so no record written by another run was removed`, at the `snapshot` stage. In every one of these cases the store did not replace, shorten or delete a history file after the lock was lost. Other refusals of the store at that write arrive the same way, as a `ConfigError` cause: a v1 history that cannot be upgraded or whose backup already exists with other content (`cannot upgrade …`), a journal that disappeared during the run (`the state journal at <path> disappeared during the run; …`), and a journal that appeared before the store's first write (`the state journal at <path> appeared before this run wrote to it, so something else created it: another program while this run held the list's lock, or another run that took the lock after this run lost it; nothing was written`). See [Damaged or incompatible state](/reference/files#damaged-or-incompatible-state).
+
+  **Handle it:** treat it as serious. If the cause is that `ConfigError`, the disk is not the problem: find out what touched the lock, and check the uncertain recipients that run left before resending. See [The send state can only be written by the store that holds its lock](/troubleshooting#the-send-state-can-only-be-written-by-the-store-that-holds-its-lock). Otherwise, fix the disk problem first. The message starts with `could not record send state` and says which write failed: `before sending to …` means this run did not call the provider for that recipient; `after sending to …` and `after the send to … stopped …` mean the history reads the attempt as uncertain, so check the mailbox's Sent Items, or use [`mailroll-outlook export-sent`](/guides/export-sent), before resending; `snapshot` means no recorded outcome is lost. See [When the history cannot be written](/guides/history#when-the-history-cannot-be-written).
+</ResponseField>
+
+<ResponseField name="RunCancelledError" type="class">
+  The run was stopped through its `signal`.
+
+  **Thrown when:** the signal is aborted during sign-in or before a list starts. If at least one list had already produced a result, it arrives as the `cause` of a `RunInterruptedError` instead.
+
+  **Handle it:** expected after you abort. Lists that did not run stay pending for the next run.
+</ResponseField>
+
+<ResponseField name="TemplateRunError" type="class">
+  A list stopped midway because of an error. It carries:
+
+  - `report`: the partial `RunReport` of the list. Every planned recipient is accounted for: the ones not reached are `not-attempted`.
+  - `cause`: the error that stopped the list, such as a `TemplateRenderError` or `StatePersistenceError`.
+
+  **Thrown when:** `runTemplate` (from `mailroll/core`) hits an error that is not about a single recipient. Through `runSelection`, it never reaches you directly: the partial result is added to the `completed` results of a `RunInterruptedError`, and the `TemplateRunError` becomes its `cause`.
+</ResponseField>
+
+<ResponseField name="RunInterruptedError" type="class">
+  A run that had already produced at least one list result could not finish. Exported by `mailroll` only. It carries:
+
+  - `completed`: the `TemplateRunResult` of each list that ran, including the partial result of a list that stopped midway.
+  - `notRun`: `{ templateId, dataFile }` of every list that never started. They are untouched and stay pending.
+  - `cause`: the original error.
+
+  Its message reads `run stopped after N of M list(s): <reason>`, where `N` counts only the lists that finished.
+
+  **Thrown when:** any error, including a cancellation, happens after the first list result exists. When no list result exists yet, `runSelection` throws the original error unchanged.
+
+  **Handle it:** report `completed` exactly like a successful result, because those sends happened and, in live mode, are recorded. Then decide based on `cause`.
+</ResponseField>
+
+## What reaches you from runSelection
+
+The rules above add up to a short decision list for the error `runSelection` throws:
+
+- **`RunInterruptedError`**: some lists ran. Use `completed`, then look at `cause`.
+- **`StatePersistenceError`**: the first list may already have sent messages before its final snapshot failed. Check delivery before resending.
+- **Any other error**: no list ran, so this call sent nothing. This holds for plugins built with `definePlugin`; a plugin that implements the lower-level `TemplatePlugin` contract itself controls what its `run` throws.
+
+Errors can be nested: a `StatePersistenceError` can sit inside a `TemplateRunError` inside a `RunInterruptedError`. Search the `cause` chain rather than checking only the top-level class. This handler does that and turns each case into an action:
+
+```ts
+import {
+  ConfigError,
+  RunCancelledError,
+  RunInterruptedError,
+  type RunSelectionOptions,
+  runSelection,
+  type SendSelection,
+  SignInRequiredError,
+  StatePersistenceError,
+  type TemplateRunResult,
+} from 'mailroll';
+
+function findCause<E extends Error>(
+  error: unknown,
+  type: abstract new (...args: never[]) => E,
+): E | undefined {
+  let current: unknown = error;
+
+  // A bounded walk: cause chains are short,
+  // and a cyclic one must not loop forever.
+  for (
+    let depth = 0;
+    depth < 10 && current instanceof Error;
+    depth += 1
+  ) {
+    if (current instanceof type) {
+      return current;
+    }
+
+    current = current.cause;
+  }
+
+  return undefined;
+}
+
+export interface RunOutcome {
+  readonly results: readonly TemplateRunResult[];
+  readonly action: string | undefined;
+}
+
+export async function run(
+  selection: SendSelection,
+  options: RunSelectionOptions,
+): Promise<RunOutcome> {
+  try {
+    return {
+      results: await runSelection(selection, options),
+      action: undefined,
+    };
+  } catch (error) {
+    const results =
+      error instanceof RunInterruptedError ? error.completed : [];
+    const persistence = findCause(error, StatePersistenceError);
+
+    if (persistence !== undefined) {
+      const who = persistence.recipient ?? 'the last recipients';
+      const check = `check whether ${who} received the message before resending`;
+
+      return {
+        results,
+        action:
+          persistence.cause instanceof ConfigError
+            ? `${check}; then resolve the refusal: ${persistence.cause.message}`
+            : `${check}; then fix the disk`,
+      };
+    }
+
+    if (findCause(error, SignInRequiredError) !== undefined) {
+      return {
+        results,
+        action: 'sign in once from a terminal, then retry',
+      };
+    }
+
+    if (findCause(error, RunCancelledError) !== undefined) {
+      return { results, action: undefined };
+    }
+
+    if (error instanceof ConfigError) {
+      return {
+        results,
+        action: `fix the configuration: ${error.message}`,
+      };
+    }
+
+    throw error;
+  }
+}
+```
+
+The order of the checks matters: a possible unrecorded send is the most urgent, so it is tested first. Unknown errors are rethrown rather than hidden.
+
+A `StatePersistenceError` whose `cause` is a `ConfigError` is the store refusing the write, not a disk problem: a lost lock, a journal that disappeared or appeared during the run, or a v1 history that cannot be upgraded or whose backup already exists with other content. The handler passes on its message instead of asking for a disk fix. If the message says the lock no longer belongs to this run, something touched the `.state/` folder during the run. A send this run had started is read as uncertain, so another run on the same list does not send it again by itself; check those recipients before resending. See [Locks](/guides/history#locks).
+
+## CLI exit codes
+
+The CLI maps these errors to its exit codes as follows. The complete exit code table, including codes not caused by errors, is in [Exit codes](/cli/overview#exit-codes).
+
+| Error | Exit code |
+| --- | --- |
+| `SignInRequiredError`, anywhere in the cause chain | 2 |
+| `RunCancelledError` after Ctrl-C, directly or as a cause | 130 |
+| `RunInterruptedError` with any other cause | 1 |
+| `ConfigError`, `DataSourceError`, `TemplateRenderError` | 1 |
+| `AuthError`, `StatePersistenceError` | 1 |
+
+On exit code 1 the CLI prints the message followed by its causes, each on a line starting with `caused by:`. When a run was interrupted, it prints the summary of the finished lists first. Invalid options and other usage errors detected by the CLI itself also exit with 2, but they are not `MailrollError` classes.
+
+## Related
+
+- [Node.js SDK](/sdk/nodejs)
+- [History](/guides/history)
+- [Troubleshooting](/troubleshooting)
+- [Exit codes](/cli/overview#exit-codes)

@@ -1,0 +1,131 @@
+---
+title: "Environment variables"
+description: "Every environment variable mailroll reads, how connection secret names are built, and how the .env file is loaded."
+icon: "key-round"
+---
+
+mailroll reads a small, fixed set of environment variables: two Microsoft Entra IDs per connection, a few optional defaults for the CLI, and the color switches. This page lists all of them. To register the Entra app these IDs come from, see [Register an app in Microsoft Entra ID](/guides/outlook#register-an-app-in-microsoft-entra-id).
+
+## Summary
+
+| Variable | Read by | Purpose |
+| --- | --- | --- |
+| `<CAMPAIGN>__<CONNECTION>__TENANT_ID` | CLI and SDK | Entra tenant of a connection |
+| `<CAMPAIGN>__<CONNECTION>__CLIENT_ID` | CLI and SDK | Entra app of a connection |
+| `TEST_RECIPIENT` | CLI only | Default test inbox |
+| `CC_RECIPIENT` | CLI only | CC addresses offered in prompts |
+| `TOKEN_CACHE_PATH` | CLI and SDK | Folder for saved sign-ins |
+| `NO_COLOR`, `FORCE_COLOR` | CLI only | Terminal colors |
+
+The SDK reads variables from its `env` option, which defaults to `process.env`. It never reads `.env` files; see [The .env file](#the-env-file).
+
+## Connection secrets
+
+Each connection needs the directory (tenant) ID and the application (client) ID of the Entra app it signs in with. They are read from two variables whose names are derived from the campaign id and the connection id:
+
+```text Variable names
+<KEY(campaign id)>__<KEY(connection id)>__TENANT_ID
+<KEY(campaign id)>__<KEY(connection id)>__CLIENT_ID
+```
+
+`KEY` turns an id into a name segment in three steps:
+
+1. Replace every run of characters other than ASCII letters and digits (`A`–`Z`, `a`–`z`, `0`–`9`) with a single `_`. This includes the `/` in a campaign id, `-`, `_` itself, spaces, and accented letters.
+2. Remove `_` from the start and the end.
+3. Convert to upper case.
+
+The two segments and the field name are joined with a double underscore, `__`.
+
+### Examples
+
+| Campaign id · connection id | Tenant ID variable |
+| --- | --- |
+| `acme/onboarding` · `outlook-1` | `ACME_ONBOARDING__OUTLOOK_1__TENANT_ID` |
+| `retail/spring__sale` · `main` | `RETAIL_SPRING_SALE__MAIN__TENANT_ID` |
+| `_internal/news-letter_` · `-backup-box-` | `INTERNAL_NEWS_LETTER__BACKUP_BOX__TENANT_ID` |
+| `café/promo` · `box-2` | `CAF_PROMO__BOX_2__TENANT_ID` |
+
+The client ID variable has the same name with `CLIENT_ID` instead of `TENANT_ID`. Notice in the examples:
+
+- A hyphenated connection id, such as `outlook-1`, becomes `OUTLOOK_1`.
+- A run of several separators, such as `__` in `spring__sale`, collapses into one `_`.
+- Leading and trailing separators disappear: `_internal/news-letter_` becomes `INTERNAL_NEWS_LETTER`, and `-backup-box-` becomes `BACKUP_BOX`.
+- Non-ASCII letters are separators too: `café` becomes `CAF`.
+
+For the first example, a `.env` file looks like this. The zero GUIDs are placeholders; put your app's real IDs there:
+
+```bash .env wrap
+ACME_ONBOARDING__OUTLOOK_1__TENANT_ID=00000000-0000-0000-0000-000000000000
+ACME_ONBOARDING__OUTLOOK_1__CLIENT_ID=00000000-0000-0000-0000-000000000000
+```
+
+To compute a name in code instead of by hand, use `connectionEnvKey` from `mailroll`. It applies the same rule; the third argument is appended as given:
+
+```ts
+import { connectionEnvKey } from 'mailroll';
+
+// Prints ACME_ONBOARDING__OUTLOOK_1__CLIENT_ID
+console.log(
+  connectionEnvKey('acme/onboarding', 'outlook-1', 'CLIENT_ID'),
+);
+```
+
+### Rules
+
+- **When they are needed:** test and live sends, and `mailroll-outlook export-sent`. Dry runs never read them.
+- **When they are checked:** for every selected connection while the run is prepared, before any CC prompt, sign-in or send.
+- **Values** are trimmed. A missing or blank value fails with `missing environment secret <NAME>`, naming the exact variable to set.
+- **Collisions are rejected.** Two campaigns whose ids produce the same key, such as `acme/spring-sale` and `acme/spring_sale` (both `ACME_SPRING_SALE`), fail with `campaigns "…" and "…" would share secrets and token caches`. Connections of one campaign are checked the same way.
+
+<Warning>
+  Keep `.env` out of version control, and never place these IDs, or anything from the token cache, in browser code. See [SDK overview](/sdk/overview).
+</Warning>
+
+## TEST_RECIPIENT
+
+The inbox that receives every message of a test send when you do not name one.
+
+- **`mailroll send --mode test`** uses it when `--to` is omitted. Without either, the command fails with `test mode requires --to <address> or TEST_RECIPIENT in the environment`. An invalid value fails with `invalid test recipient "…": …`.
+- **The menu's Stage step** proposes it as the test inbox. If it is not a valid address, the menu prints a notice and asks you to type the inbox instead.
+- **The SDK** does not read it. Pass `mode: { kind: 'test', testRecipient }` instead.
+
+## CC_RECIPIENT
+
+A comma-separated list of addresses that the interactive CC picker offers as choices, for example `records@example.com,audit@example.com`.
+
+- It is only a list of suggestions. mailroll never adds these addresses to a message unless you select them in the picker.
+- The picker appears in the `send` command and in the menu when a list has no CC from `--cc`, the selection or the template, and the run is interactive. See [CC policy and CC addresses](/reference/configuration).
+- Duplicates are removed, compared case-insensitively. An invalid entry fails with `invalid CC address "…": …` when the picker opens.
+- The SDK does not read it. Use the `cc` selection field or the `resolveCc` option.
+
+## TOKEN_CACHE_PATH
+
+The folder where saved Microsoft sign-ins are stored.
+
+- **When unset:** `.secrets/tokens`.
+- Relative paths are resolved against the current working directory, so run mailroll from the same folder every time, or set an absolute path.
+- An empty value is not treated as unset: the working directory itself becomes the root, so each cache file is created at `<campaign key>/<connection key>.json` under it.
+- The SDK reads it from the `env` option.
+
+The file layout, permissions and recovery from a damaged cache are described in [Files and folders](/reference/files).
+
+## Colors
+
+The CLI colors its terminal output through Node.js's `util.styleText`, which follows Node's rules for terminals and the `NO_COLOR` and `FORCE_COLOR` variables. The global option `--no-color` sets `NO_COLOR=1` and `FORCE_COLOR=0` for the command it runs. JSON output (`--json`) is never colored.
+
+## The .env file
+
+The CLI loads a file named `.env` from the current working directory when it starts, using Node's `process.loadEnvFile()`.
+
+- A missing `.env` is ignored.
+- Any other problem, such as a file without read permission, stops the CLI with `error: cannot read .env: …` and exit code 2.
+- How values from `.env` combine with variables already set in your shell follows `process.loadEnvFile()`.
+
+The SDK does not load `.env`. In your own program, load it yourself (for example with `process.loadEnvFile()`) or pass the variables through the `env` option of `runSelection`.
+
+## Related
+
+- [Connect Outlook](/guides/outlook)
+- [Files and folders](/reference/files)
+- [Global options](/cli/overview#global-options)
+- [Node.js SDK](/sdk/nodejs)

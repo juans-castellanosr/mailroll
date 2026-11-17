@@ -1,0 +1,82 @@
+---
+title: "Email addresses"
+description: "The exact rules mailroll applies to every address, how addresses are normalized and compared, and what is and is not known about internationalized addresses."
+icon: "at-sign"
+---
+
+Every address mailroll handles goes through one validator: recipients returned by your template's validator, CC addresses, the test inbox, subset recipients and each connection's `mailbox`. This page states its rules, how mailroll normalizes and compares addresses, and where Microsoft's support ends.
+
+In code, the validator is `parseEmailAddress`, exported by both `mailroll` and `mailroll/core`. See [Browser](/sdk/browser) for an example.
+
+## Normalization
+
+Before checking anything, mailroll removes leading and trailing whitespace and converts the text to Unicode NFC, so the same visible address always has the same characters. The result is the address mailroll validates, stores in your recipient objects and **sends to**.
+
+Letter case is kept when sending: `Ana@Example.com` is sent as `Ana@Example.com`. For comparisons, mailroll uses a lower-case copy of the address:
+
+- the keys of the [send history](/reference/files#state-files),
+- duplicate detection in a CSV (the first occurrence is kept),
+- matching `--recipients` or a subset policy against the list,
+- duplicate checks in CC lists,
+- matching the signed-in Microsoft account against the connection's `mailbox`.
+
+So `Ana@Example.com` and `ana@example.com` are the same recipient for history and resends.
+
+## Rules
+
+An address is accepted only if all of these hold after normalization:
+
+- **It is text and not empty.** Other values fail with `email must be text`; an empty one with `email is empty`.
+- **Length:** at most 254 bytes in total and at most 64 bytes before the `@`, counted in UTF-8. A letter like `é` counts as two bytes.
+- **No hidden characters:** no spaces, control characters, invisible formatting characters or line and paragraph separators anywhere.
+- **Exactly one `@`**, with text on both sides.
+- **Local part (before the `@`):** one or more atoms separated by single dots. An atom is made of letters and digits in any script (including combining marks) and these symbols: ``! # $ % & ' * + / = ? ^ _ ` { | } ~ -``. The local part cannot start or end with a dot or contain two dots in a row.
+- **Domain (after the `@`):** at least two labels separated by dots. Each label has 1 to 63 characters, made of letters and digits in any script, with hyphens allowed inside but not at either end.
+- **Last label:** two or more letters (in any script), or an ASCII label that starts with `xn--`.
+
+When a rule fails, the reason says which part is wrong, for example `email is not a valid address (invalid domain)` or `email is not a valid address (the part before the @ exceeds 64 bytes)`.
+
+### Not supported
+
+These forms are valid in some email standards but rejected by mailroll:
+
+| Form | Example |
+| --- | --- |
+| Quoted local part | `"ana smith"@example.com` |
+| IP address as domain | `ana@[192.0.2.1]` |
+| Single-label domain | `ana@localhost` |
+| Name with address | `Ana <ana@example.com>` |
+| Comments | `ana(team)@example.com` |
+| Numeric top-level label | `ana@example.123` |
+
+### Internationalized domains
+
+Domains are checked in the form you write them. An internationalized domain such as `bücher.example` is checked label by label in Unicode. DNS length limits apply to its ASCII (punycode) form, which mailroll does not compute, so a very long internationalized domain can pass validation and still be refused when sending. For ASCII domains, the 63-character label limit is the DNS limit.
+
+## Accepted is not delivered
+
+Passing validation means only that mailroll will try to send to the address. Whether Microsoft accepts the message, and whether the receiving server delivers it, is outside mailroll. The three lists below keep these questions apart.
+
+### What mailroll accepts
+
+- Every address that follows the [rules](#rules) above, including local parts and domains in non-Latin scripts.
+- A connection `mailbox` with the same rules. Sign-in still has to succeed as that exact mailbox.
+
+### What Microsoft documents
+
+- Microsoft's Exchange Team announced support in Exchange Online for sending email to, and receiving it from, internationalized addresses (EAI). According to that announcement, using an internationalized address as a user's own mailbox address was not supported at the time. Check Microsoft's current documentation before you rely on either point.
+
+### What is unverified
+
+- Whether Microsoft Graph `sendMail` accepts internationalized recipient addresses in every case. mailroll does not rely on any Microsoft statement about it.
+- Whether the receiving server can take the message. Internationalized addresses depend on the SMTPUTF8 extension (RFC 6531) on every server along the way; a message to a server without it is likely to bounce.
+- mailroll has not been tested by sending real messages to internationalized addresses through Microsoft Graph.
+- mailroll makes **no delivery promise** for internationalized addresses. If your list contains them, send a test to an address you control on the same kind of server first, and check the result before a live send.
+- A connection `mailbox` with an internationalized address passes validation, but given the announcement above, your Microsoft 365 account may not be able to have one.
+
+## Related
+
+- [Create a campaign](/guides/campaigns)
+- [Templates](/guides/templates)
+- [Configuration files](/reference/configuration)
+- [Browser](/sdk/browser)

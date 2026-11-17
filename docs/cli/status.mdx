@@ -1,0 +1,150 @@
+---
+title: "status"
+description: "Reference for mailroll status: what it counts, its text and JSON output, and its exit codes."
+icon: "list-checks"
+---
+
+`mailroll status` shows, for every campaign, template and CSV list, how many recipients are in the list, sent, failed, uncertain and pending. It sends nothing, needs no secrets or sign-in, and writes no files.
+
+## mailroll status
+
+The command reads every campaign under the campaigns folder.
+
+```bash Terminal
+mailroll status [--json]
+```
+
+For each template, `status` loads the template's plugin, reads each CSV file through the template's validator, and compares the accepted recipients with the list's history. Because it runs the same preparation as a send, a broken plugin, an invalid CSV file or a corrupt history file shows up here as a template problem, before you try to send.
+
+Use `-C, --campaigns` to read another campaigns folder; see [Global options](/cli/overview#global-options).
+
+## Options
+
+<ResponseField name="--json" type="boolean">
+  Prints the status as JSON on stdout instead of text. See [JSON output](#json-output).
+
+  **When omitted:** the status is printed as text on stdout.
+</ResponseField>
+
+## What the counts mean
+
+The counts describe the recipients in the CSV file now, compared with the history of earlier live sends. Test and dry runs never appear in them.
+
+- **in list** (`total`): rows the template's validator accepted, without duplicates.
+- **sent**: recipients whose last recorded outcome is sent.
+- **failed**: recipients whose last send failed.
+- **uncertain**: recipients whose last send has an unknown outcome. See [Uncertain sends](/guides/history#uncertain-sends).
+- **pending**: `total − sent − uncertain`. This is everyone not yet sent, including recipients whose last send failed, so failed recipients are counted in both `failed` and `pending`. It is what the default `pending` policy would send.
+- **rejected**: rows the template's validator rejected, and duplicate addresses. They are never sent.
+- **CC rejected** (`ccRejectedMessages`, `requiredCcRejectedMessages`): sent recipients whose recorded message had a CC the provider rejected, and those of them whose template required a CC when the message was sent. They count messages, not addresses, and they never change the exit code of `status`.
+
+History entries for addresses that are no longer in the CSV file are not counted.
+
+## Examples
+
+Show every campaign under the default `campaigns` folder:
+
+```bash Terminal
+npx mailroll status
+```
+
+Read another folder and save the result as JSON:
+
+```bash Terminal
+npx mailroll -C ./client-campaigns status \
+  --json > status.json
+```
+
+## Output
+
+### Text output
+
+Each campaign is printed as its id and display name, followed by one line per template and CSV list:
+
+```text Output wrap
+acme/onboarding — Acme onboarding
+  welcome · recipients.csv: 3 in list · sent 0 · failed 0 · pending 3 · 1 row(s) rejected
+  reminder: unavailable — no CSV in data/
+```
+
+- Each list line has `in list`, `sent`, `failed` and `pending`. `uncertain N`, `N row(s) rejected` and `CC rejected M (R required)` are added only when they are not zero.
+- A list whose history is still in the format of mailroll 0.1 gets the line `history is in the v1 format; the next live run upgrades it to v2 (one-way)`.
+- Each entry of `evidence` (see below) gets its own line, such as `ada@example.com: sent · CC rejected (required): records@example.com · attempt … · provider id … (for tracing; not proof of delivery)`.
+- A template that cannot be read gets one `unavailable` line with the reason, instead of its lists. The reason is `no CSV in data/` or the error message, such as a plugin or CSV error.
+
+When the campaigns folder has no campaigns, `status` prints `No campaigns found under <dir> (expected <group>/<name>/campaign.config.json).` to stderr and nothing to stdout.
+
+### JSON output
+
+With `--json`, `status` prints an array with one object per campaign. With no campaigns it prints `[]`.
+
+```json Output wrap
+[
+  {
+    "campaignId": "acme/onboarding",
+    "displayName": "Acme onboarding",
+    "templates": [
+      {
+        "templateId": "welcome",
+        "lists": [
+          {
+            "dataFile": "recipients.csv",
+            "counts": {
+              "total": 3,
+              "sent": 0,
+              "failed": 0,
+              "uncertain": 0,
+              "pending": 3,
+              "rejected": 1,
+              "ccRejectedMessages": 0,
+              "requiredCcRejectedMessages": 0
+            },
+            "history": "none",
+            "evidence": []
+          }
+        ]
+      },
+      {
+        "templateId": "reminder",
+        "lists": [],
+        "problem": "no CSV in data/"
+      }
+    ]
+  }
+]
+```
+
+<ResponseField name="campaignId" type="string" required>
+  The campaign id, `group/name`.
+</ResponseField>
+
+<ResponseField name="displayName" type="string" required>
+  The `displayName` from `campaign.config.json`.
+</ResponseField>
+
+<ResponseField name="templates" type="array" required>
+  One entry per template folder.
+
+  - `templateId`: the template's folder name.
+  - `lists`: one entry per CSV file, each with `dataFile`, `counts`, `history` and `evidence`. Empty when the template has a problem.
+  - `counts`: `total`, `sent`, `failed`, `uncertain`, `pending`, `rejected`, `ccRejectedMessages` and `requiredCcRejectedMessages`, as described in [What the counts mean](#what-the-counts-mean).
+  - `history`: `"none"` (no history yet), `"v1"` (written by mailroll 0.1, upgraded by the next live run) or `"v2"`. In code, it is absent when `getCampaignStatus` is given its own `store`, because mailroll then cannot know how that store keeps its history.
+  - `evidence`: the history entries that need tracing: uncertain recipients, sent recipients with a rejected CC, entries with earlier uncertain attempts (`uncertainAttemptIds`), and sent recipients whose later resend is uncertain (`uncertainResend`). Each has `email`, `status` and `at`, plus `attemptId`, `providerMessageId`, `uncertainAttemptIds`, `cc` and `uncertainResend` when known. Evidence is for tracing; it never proves delivery, and `status` never changes the history or puts anyone back in the queue.
+  - `problem`: present only when the template cannot be read. It holds `no CSV in data/` or the error message.
+</ResponseField>
+
+The same report is available in code through `getCampaignStatus` in the [Node.js SDK](/sdk/nodejs).
+
+## Exit codes
+
+- `0`: every template could be read, or there are no campaigns.
+- `1`: at least one template has a problem (also with `--json`), or a campaign itself cannot be read, for example because its `campaign.config.json` is invalid.
+- `2`: an unknown option.
+
+The [exit code table](/cli/overview#exit-codes) is authoritative.
+
+## Related
+
+- [`mailroll send`](/cli/send): send to the pending recipients
+- [History](/guides/history): how outcomes are recorded and what uncertain means
+- [Resending](/guides/resending): which recipients each policy sends to

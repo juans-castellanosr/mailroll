@@ -1,0 +1,263 @@
+---
+title: "Quickstart"
+description: "Create an example campaign and preview every message it would send, without signing in or sending anything."
+icon: "rocket"
+---
+
+In this quickstart you install mailroll, create a small campaign with one template and a four-row list, check the list, and render every message to an HTML preview file. You do not need a Microsoft 365 account for any of it: a dry run never signs in and never sends.
+
+## Install mailroll and Outlook
+
+mailroll needs Node.js 22.18 or newer. Your template plugin imports mailroll, so install it as a local dependency of the project that holds your campaigns. The `type=module` setting lets Node.js load the plugin as an ES module. This quickstart sends through Outlook, so it also installs the official Outlook integration, which mailroll does not include.
+
+```bash Terminal
+mkdir my-campaigns && cd my-campaigns
+npm init -y
+npm pkg set type=module
+npm install mailroll @mailroll/outlook
+```
+
+Then declare the integration in `mailroll.json`, next to `package.json`. Every run, dry runs included, uses only the integrations declared there:
+
+```json mailroll.json
+{ "integrations": ["@mailroll/outlook"] }
+```
+
+For pnpm and the optional MJML package, see [Installation](/installation). How integrations are found and checked is in [Add an integration](/guides/integrations).
+
+## Create the campaign
+
+A campaign is a folder under `campaigns/`, named `<group>/<name>`. This one is `acme/onboarding`. It holds the campaign settings, the mailbox it sends from, and one template called `welcome` with its own settings, recipient list, email body and plugin.
+
+<Tree>
+  <Tree.Folder name="campaigns" defaultOpen>
+    <Tree.Folder name="acme" defaultOpen>
+      <Tree.Folder name="onboarding" defaultOpen>
+        <Tree.File name="campaign.config.json" />
+        <Tree.Folder name="connections" defaultOpen>
+          <Tree.File name="outlook-1.json" />
+        </Tree.Folder>
+        <Tree.Folder name="templates" defaultOpen>
+          <Tree.Folder name="welcome" defaultOpen>
+            <Tree.Folder name="code" defaultOpen>
+              <Tree.File name="plugin.ts" />
+            </Tree.Folder>
+            <Tree.Folder name="config" defaultOpen>
+              <Tree.File name="template.config.json" />
+            </Tree.Folder>
+            <Tree.Folder name="data" defaultOpen>
+              <Tree.File name="recipients.csv" />
+            </Tree.Folder>
+            <Tree.Folder name="view" defaultOpen>
+              <Tree.File name="compiled.html" />
+            </Tree.Folder>
+          </Tree.Folder>
+        </Tree.Folder>
+      </Tree.Folder>
+    </Tree.Folder>
+  </Tree.Folder>
+</Tree>
+
+Create the six files below with exactly this content.
+
+### Campaign settings
+
+Every campaign needs a `campaign.config.json`. Its only field, `displayName`, is the name shown in the menu and in `mailroll status`.
+
+```json campaigns/acme/onboarding/campaign.config.json
+{
+  "displayName": "Acme onboarding"
+}
+```
+
+### Connection
+
+A connection is a mailbox the campaign can send from. The dry run in this quickstart never uses it, but every template must name at least one connection.
+
+```json campaigns/acme/onboarding/connections/outlook-1.json
+{
+  "id": "outlook-1",
+  "kind": "outlook",
+  "mailbox": "sender@example.com"
+}
+```
+
+- `id` is how templates and the CLI refer to this connection. The file name does not matter.
+- `kind` names the integration that sends: `"outlook"` is the id of `@mailroll/outlook`, declared in `mailroll.json` above.
+- `mailbox` is the address that sends. Before a real send you sign in as this account.
+
+### Template settings
+
+Each template has its own settings file.
+
+```json campaigns/acme/onboarding/templates/welcome/config/template.config.json
+{
+  "ccPolicy": "optional",
+  "connectionIds": ["outlook-1"],
+  "subjectTemplate": "Welcome to Acme",
+  "context": {
+    "portalUrl": "https://example.com/start"
+  }
+}
+```
+
+- `ccPolicy` decides whether messages of this template may, must or must not carry a CC. `optional` allows either.
+- `connectionIds` lists the connections this template may send from.
+- `subjectTemplate` is a value for your plugin to read. mailroll itself does not use it.
+- `context` holds fixed values for your plugin, here the link every message points to.
+
+Every field is described in [Configuration](/reference/configuration).
+
+### Recipient list
+
+A template's lists are the CSV files in its `data/` folder. Each row is one recipient, and an `email` column is required.
+
+```csv campaigns/acme/onboarding/templates/welcome/data/recipients.csv
+email,firstName,plan
+ada@example.com,Ada,Pro
+grace@example.com,Grace,Free
+alan@example.org,Alan,Pro
+not-an-address,Nobody,Free
+```
+
+The last row has an invalid address on purpose, so you can see how mailroll reports a rejected row.
+
+### Email body
+
+`view/compiled.html` is the HTML body. Each `{{name}}` is a placeholder your plugin fills per recipient.
+
+```html campaigns/acme/onboarding/templates/welcome/view/compiled.html
+<!doctype html>
+<html lang="en">
+  <body>
+    <p>Hi {{firstName}},</p>
+    <p>Your {{plan}} plan is ready.</p>
+    <p><a href="{{portalUrl}}">Open your account</a></p>
+  </body>
+</html>
+```
+
+### Plugin
+
+The plugin is the only code in a campaign. It does two jobs: it turns each CSV row into a recipient or rejects it, and it renders one recipient's message. Node.js runs the TypeScript file directly; there is no build step.
+
+```ts campaigns/acme/onboarding/templates/welcome/code/plugin.ts
+import { loadCompiledTemplate } from 'mailroll';
+import {
+  definePlugin,
+  invalid,
+  parseEmailAddress,
+  type Recipient,
+  renderWithMarkers,
+  requiredField,
+  TemplateRenderError,
+  valid,
+} from 'mailroll/core';
+
+interface Member extends Recipient {
+  readonly firstName: string;
+  readonly plan: string;
+}
+
+export default definePlugin<Member>(
+  async (template) => {
+    const html = await loadCompiledTemplate(template);
+    const subject = template.subjectTemplate;
+    const portalUrl = template.context['portalUrl'];
+
+    if (subject === undefined || portalUrl === undefined) {
+      throw new TemplateRenderError('set "subjectTemplate" and "context.portalUrl" in template.config.json');
+    }
+
+    return {
+      render: (member) =>
+        renderWithMarkers({
+          template: html,
+          subject,
+          variables: { firstName: member.firstName, plan: member.plan, portalUrl },
+        }),
+    };
+  },
+  () => ({
+    validate: (row) => {
+      const reasons: string[] = [];
+      const email = parseEmailAddress(row['email'] ?? '');
+
+      if (!email.ok) {
+        reasons.push(...email.reasons);
+      }
+
+      const firstName = requiredField(row['firstName'], 'firstName', reasons);
+      const plan = requiredField(row['plan'], 'plan', reasons);
+
+      return email.ok && reasons.length === 0 ? valid({ email: email.value, firstName, plan }) : invalid(reasons);
+    },
+  }),
+);
+```
+
+- The first function prepares the renderer once: it reads `compiled.html`, takes the subject and the portal link from the template settings, and fails early if either is missing. Its `render` function fills the placeholders for one recipient; values are HTML-escaped.
+- The second function returns the validator. `validate` receives one CSV row as strings, checks the address and the two required columns, and returns `valid(...)` with the recipient or `invalid(...)` with the reasons.
+
+[Templates](/guides/templates) explains the plugin contract in full.
+
+## Check the list
+
+`mailroll status` loads every campaign, runs each plugin's validator over every list, and compares the result with the send history. Run it from the project folder, which contains `campaigns/`.
+
+```bash Terminal
+npx mailroll status
+```
+
+```text Output wrap
+acme/onboarding — Acme onboarding
+  welcome · recipients.csv: 3 in list · sent 0 · failed 0 · pending 3 · 1 row(s) rejected
+```
+
+Three rows are valid recipients, none has been sent yet, and the `not-an-address` row was rejected by the validator. If a template has a problem, such as a missing file or an error thrown by its plugin, `status` shows it on that template's line instead of the counts.
+
+## Preview every message
+
+A dry run renders each message without signing in or sending. With `--write-previews` it also writes every message to an HTML file.
+
+```bash Terminal
+npx mailroll send -c acme/onboarding -t welcome \
+  --connection outlook-1 \
+  -m dry-run --cc "" --write-previews
+```
+
+- `-c`, `-t` and `--connection` select the campaign, the template and the mailbox.
+- `-m dry-run` selects the mode.
+- `--cc ""` says the messages have no CC. Without it, mailroll asks you in the terminal, because this template's `ccPolicy` allows a CC.
+- `--write-previews` writes the HTML files to `previews/`.
+
+The command prints a summary like this when it finishes:
+
+```text Output wrap
+acme/onboarding — dry-run
+  welcome · recipients.csv [pending] ok: rendered 3, failed 0, uncertain 0, not attempted 0, skipped 1
+    previews: previews/welcome/recipients
+```
+
+- `[pending]` is the resend policy, and the default. It sends to recipients with no recorded send and retries earlier failures; it skips recipients already sent or whose earlier send is uncertain.
+- `ok` means nothing needs your attention.
+- `rendered 3` counts the messages rendered; in test and live mode this word is `sent`. `skipped 1` is the rejected row.
+
+mailroll also writes progress lines as JSON to stderr while it runs. Add `-q` to show only warnings and errors.
+
+## Read the previews
+
+Open the files in `previews/welcome/recipients/` in a browser. There is one file per recipient, numbered in the order the messages were rendered: `0001-ada@example.com.html`, `0002-grace@example.com.html` and `0003-alan@example.org.html`. The first line of each file records who the message is for:
+
+```html previews/welcome/recipients/0001-ada@example.com.html wrap
+<!-- DRY RUN preview | to: ada@example.com | subject: Welcome to Acme -->
+```
+
+The folder is deleted and rewritten on every dry run with `--write-previews`. Nothing was sent, and the send history did not change: a dry run never writes it.
+
+## Next steps
+
+- Learn the model behind campaigns, lists, modes and policies: [Core concepts](/concepts).
+- Connect a real mailbox: [Connect Outlook](/guides/outlook).
+- Send to a test inbox, then for real: [Sending](/guides/sending).
+- Prefer a menu to flags? Run `npx mailroll` in a terminal; see [CLI overview](/cli/overview).

@@ -1,0 +1,194 @@
+---
+title: "Automate runs"
+description: "Run mailroll from scripts, CI jobs and schedulers: what a run without a terminal needs, how to read its JSON summary, and how to act on exit codes."
+icon: "bot"
+---
+
+`mailroll send` works without anyone at the keyboard, as long as everything it would otherwise ask for is given up front. This page explains how mailroll decides whether it can ask, what a non-interactive send needs, and how a script reads the result.
+
+## Run without a terminal
+
+mailroll treats a run as **interactive** only when both standard input and standard error are terminals. Standard output does not count, so redirecting stdout to a file keeps a run in a terminal interactive, while redirecting stderr, or running from cron, CI or a service, makes it non-interactive.
+
+An interactive run may ask you for input. A non-interactive run never waits; anything it would have asked becomes an error:
+
+| Situation | In a terminal | Without a terminal |
+| --- | --- | --- |
+| `mailroll` with no command | Opens the menu | Prints help on stderr, exits `2` |
+| A list needs a CC and none was given | Asks once | Stops, exits `2` |
+| No usable saved sign-in | Starts a device-code sign-in | Stops, exits `2` |
+
+`mailroll send` in a terminal is therefore not prompt-free: it can still ask for a CC and start a sign-in. Give it every input below and it asks nothing.
+
+## What a non-interactive send needs
+
+- **The required options**: `--campaign`, `--template`, `--connection` and `--mode`.
+- **A CC decision.** Pass `--cc <email[,email...]>`, or `--cc ""` for no CC, unless every template either sets `cc` or has `ccPolicy: "forbidden"`. `CC_RECIPIENT` is only offered at the prompt, so it has no effect here. A live send of a template with `ccPolicy: "required"` needs a real address.
+- **A test inbox** for `--mode test`: `--to <email>`, or `TEST_RECIPIENT` in the environment.
+- **`--confirm`** for `--mode live`.
+- **The connection secrets** in the environment, or in a `.env` file in the folder mailroll runs from. See [Connection secrets](/reference/environment#connection-secrets).
+- **A saved sign-in** for every connection, for test and live. Sign in once in a terminal; see [Sign in](/guides/outlook#sign-in). The token cache is found relative to the folder mailroll runs from (`.secrets/tokens/` unless `TOKEN_CACHE_PATH` says otherwise), so run the scheduled job from the same folder, with the same `TOKEN_CACHE_PATH`, as the run that signed in.
+
+Dry runs need neither secrets nor a sign-in.
+
+## Read the result
+
+mailroll keeps its two output streams apart, so a script can capture results without parsing logs:
+
+- **stdout** carries the result: the run summary, or with `--json`, one JSON document.
+- **stderr** carries everything else: progress logs (one JSON object per line), lines starting with `warning:` and `error:`, sign-in instructions and prompts.
+
+`--quiet` hides the informational progress logs; warnings and errors are still written.
+
+This command sends a list and saves the JSON summary:
+
+```bash Terminal
+npx mailroll send -c acme/onboarding -t welcome \
+  --connection outlook-1 \
+  -m live --confirm --cc "" --json --quiet > summary.json
+```
+
+```json summary.json wrap
+{
+  "campaignId": "acme/onboarding",
+  "mode": "live",
+  "needsAttention": true,
+  "lists": [
+    {
+      "templateId": "welcome",
+      "dataFile": "recipients.csv",
+      "policy": "pending",
+      "statePath": "campaigns/acme/onboarding/templates/welcome/.state/recipients.json",
+      "counts": {
+        "total": 4,
+        "sent": 2,
+        "failed": 0,
+        "uncertain": 1,
+        "notAttempted": 0,
+        "skipped": 1,
+        "ccRejectedMessages": 0,
+        "requiredCcRejectedMessages": 0
+      },
+      "attention": [
+        {
+          "address": "alan@example.org",
+          "status": "uncertain",
+          "detail": "no answer from Microsoft Graph within 120 s; the message may or may not have been sent — check before resending",
+          "attemptId": "5c1f0e9d-8b7a-4c6d-9e5f-4a3b2c1d0e9f"
+        }
+      ],
+      "ccRejected": [],
+      "history": { "before": "v2", "upgraded": false }
+    }
+  ]
+}
+```
+
+<ResponseField name="needsAttention" type="boolean" required>
+  `true` when any list needs attention, or when the run stopped before every list ran. See [Needs attention](/guides/resending#needs-attention).
+</ResponseField>
+
+<ResponseField name="mode" type="&quot;dry-run&quot; | &quot;test&quot; | &quot;live&quot;" required>
+  The mode of the run. In a dry run, `counts.sent` counts rendered messages.
+</ResponseField>
+
+<ResponseField name="interrupted" type="object">
+  Present when an error or Ctrl-C stopped the run before every list ran, and at least one list had already run, fully or partly. `reason` is the error or cancellation message, and `notRun` lists each `{ templateId, dataFile }` that did not run; those lists are unchanged.
+
+  **When omitted:** every selected list ran, or none did (then nothing is printed).
+</ResponseField>
+
+<ResponseField name="lists[].counts" type="object" required>
+  `total` is every row of the CSV, including rows the validator rejected, plus any `--recipients` address that is not in the list. `skipped` counts rejected rows and rows the policy skipped together. See [Skipped rows](/guides/resending#skipped-rows).
+
+  `ccRejectedMessages` counts **messages** the provider accepted for the main recipient but whose CC it rejected, however many CC addresses each one lost. `requiredCcRejectedMessages` counts those whose template required a CC. Both stay `0` with integrations that do not report each recipient, such as Outlook.
+</ResponseField>
+
+<ResponseField name="lists[].attention" type="array" required>
+  One entry per recipient that needs attention. `status` is `failed`, `uncertain`, `not-attempted`, `held-uncertain` (uncertain from an earlier run and skipped by the policy) or `cc-rejected`. `detail` explains why; for failures it starts with the category, as in `[permanent] Microsoft Graph sendMail failed (HTTP 400): ...`. `attemptId` and, for `cc-rejected`, `providerMessageId` are present when known; they are for tracing, not proof of delivery.
+
+  <Warning>
+    `cc-rejected` is different from the other statuses: the provider **accepted** the message for `address`, and only a required CC was rejected. Do not resend to that address because of it. In a test send, `detail` says that the message went to the test address and that nothing was recorded.
+  </Warning>
+</ResponseField>
+
+<ResponseField name="lists[].ccRejected" type="array" required>
+  One entry per message whose CC the provider rejected, required or optional: `address` (the main recipient), `cc` (the rejected CC addresses), `required` (the template's `ccPolicy` when the message was sent), and `attemptId` and `providerMessageId` when known. Empty when no CC was rejected.
+</ResponseField>
+
+<ResponseField name="lists[].history" type="object" required>
+  The format of the list's history and whether this run upgraded it:
+
+  - `before` is `"none"` (no history yet), `"v1"` (written by mailroll 0.1) or `"v2"`, read when the list started.
+  - `upgraded` is `true` only when a live run upgraded a v1 history and found the v2 snapshot and the backups on disk. Then `backups` lists the backup files.
+  - `unconfirmed: true` appears when a live run of a v1 list could not confirm the upgrade. Check the list's state files before using an older mailroll.
+
+  See [Upgrade from the v1 format](/reference/files#upgrade-from-the-v1-format).
+</ResponseField>
+
+<ResponseField name="lists[].previewDir" type="string">
+  Where the preview files of the list were written.
+
+  **When omitted:** the run was not a dry run with `--write-previews`.
+</ResponseField>
+
+When a run fails while it is being prepared, before any list runs, for example because of a configuration error, a lock held by another run or a missing sign-in, nothing is written to stdout. The error is on stderr. See [`mailroll send`](/cli/send) for the complete output reference.
+
+## Use exit codes in a script
+
+The exit code tells a script what happened without reading the summary:
+
+| Code | Meaning for a script |
+| --- | --- |
+| `0` | Every list ran and nothing needs attention |
+| `1` | Something needs attention, or the run failed with an error |
+| `2` | Invalid usage, or input or a sign-in was needed without a terminal |
+| `130` | Stopped with Ctrl-C (SIGINT) |
+
+[Exit codes](/cli/overview#exit-codes) is the complete reference. Exit code `2` means a person has to change the command or sign in; rerunning the same command will not help.
+
+This script runs a nightly send and reports the outcome:
+
+```bash nightly-send.sh wrap
+#!/usr/bin/env bash
+set -u
+
+npx mailroll send -c acme/onboarding -t welcome \
+  --connection outlook-1 \
+  -m live --confirm --cc "" --json --quiet > summary.json
+code=$?
+
+case "$code" in
+  0)   echo "sent; nothing needs attention" ;;
+  1)   echo "needs attention or failed; see summary.json and the error output" >&2 ;;
+  2)   echo "usage error or sign-in required; fix the command or sign in from a terminal" >&2 ;;
+  130) echo "stopped before finishing; remaining recipients stay pending" >&2 ;;
+  *)   echo "unexpected exit code $code" >&2 ;;
+esac
+
+exit "$code"
+```
+
+- `set -u` without `set -e`: the script must keep running after a non-zero exit to read the code.
+- `--cc ""`: decides the CC up front, so the run never needs a prompt.
+- `> summary.json`: captures only the JSON. The file is empty when the run failed before any list ran.
+
+To list who needs attention, read `attention` from the summary, for example with [jq](https://jqlang.org):
+
+```bash Terminal wrap
+jq \
+  -r '.lists[].attention[] | "\(.status)\t\(.address)\t\(.detail)"' summary.json
+```
+
+## Stop a scheduled run
+
+Only SIGINT, the signal Ctrl-C sends, stops a run gracefully: sends in flight finish and are recorded, and nothing new starts. A second SIGINT exits at once. Other signals, such as the SIGTERM many schedulers and CI runners send on a timeout or cancel, end the process immediately: a send in progress becomes uncertain on the next run, and the list's lock file stays behind until the next live run on the same machine removes it. If the process was recovering a stale lock at that moment, it also leaves a `.recover` file, and the next live run stops until you delete it; see [Stale locks](/guides/history#stale-locks). If your scheduler lets you choose the signal, send SIGINT, for example with `timeout --signal=INT`. See [Interruptions and Ctrl-C](/guides/history#interruptions-and-ctrl-c).
+
+Do not schedule two live runs on the same list at overlapping times. The second one stops with a lock error and exits `1`; see [Locks](/guides/history#locks).
+
+## Related
+
+- [`mailroll send`](/cli/send): every option and the full output format.
+- [CLI overview](/cli/overview): streams, logging and exit codes.
+- [Send history](/guides/history): what to do after uncertain or interrupted runs.
+- [Use the SDK from Node.js](/sdk/nodejs): run sends from your own code instead of a shell.

@@ -1,0 +1,126 @@
+---
+title: "Run again safely"
+description: "Choose a resend policy, predict exactly who a run will send to, and avoid sending anyone the same email twice by accident."
+icon: "repeat"
+---
+
+Every CSV list has its own send history, and every run applies a policy to it to decide who receives the email this time. Use this page when you run a list again: after adding rows, after failures, or after a run that stopped early.
+
+## How history and policies work together
+
+A live run records one status per recipient of the list: `sent`, `failed` or `uncertain`. A recipient who was never sent has no status. Recipients are matched by their address without regard to letter case, so `Ada@Example.com` and `ada@example.com` share one history entry.
+
+Before sending, a run reads the list's history and applies the policy to every row that passed the template's validator. Each row is either sent or skipped with a reason. All modes do this, but only live runs write history. A dry-run or a test run of `mailroll send` with the same policy therefore shows exactly who the same live run would send to. The menu's Stage step is different: it ignores the policy and sends one sample per list, or every row, to the test inbox.
+
+The history belongs to one CSV file of one template. Another template, or another CSV of the same template, has a separate history. See [Send history](/guides/history) for how it is stored.
+
+## Choose a policy
+
+Pass the policy with `--policy`. In the menu, the review panel offers **Change policy** once a list has history, and **Choose recipients** for a subset.
+
+<ResponseField name="pending" type="policy">
+  Sends to recipients with no status and to those whose last send failed. Use it for every regular run: the first send, a run after adding rows, and a run after failures.
+
+  This is the policy `mailroll send` uses when you pass no `--policy`.
+</ResponseField>
+
+<ResponseField name="failed-only" type="policy">
+  Sends only to recipients whose last send failed. Use it to retry failures without picking up rows added since the last run.
+</ResponseField>
+
+<ResponseField name="force-all" type="policy">
+  Sends to every row of the list, whatever its history, including recipients who already received the email and uncertain ones.
+</ResponseField>
+
+<ResponseField name="subset" type="policy">
+  Sends only to the addresses in `--recipients` (comma separated, matched without regard to case), whatever their history.
+
+  **Constraints:** `--recipients` is required and must hold at least one valid address. `--recipients` is rejected with any other policy.
+</ResponseField>
+
+The policy only decides who is planned. Pacing, retries, CC and the mode work the same way under every policy.
+
+### Who each policy sends to
+
+This table shows, for each status in the history, which policies send to the recipient. `subset` sends only when the address is in `--recipients`; anyone else in the list is skipped as `not selected (subset policy)`.
+
+| Status in history | Sent by | Skipped by (reason) |
+| --- | --- | --- |
+| None (never sent) | `pending`, `force-all`, `subset` | `failed-only` (not a previous failure) |
+| `failed` | `pending`, `failed-only`, `force-all`, `subset` | none |
+| `uncertain` | `force-all`, `subset` | `pending`, `failed-only` (outcome is uncertain) |
+| `sent` | `force-all`, `subset` | `pending` (already sent), `failed-only` (not a previous failure) |
+| `sent`, but a later resend failed or is uncertain | `force-all`, `subset` | `pending` (already sent), `failed-only` (not a previous failure) |
+
+The last row is easy to miss. When you resend to someone who already has the email and that resend fails, the recipient stays `sent`: they received the email at least once. `failed-only` does not pick them up, because their last recorded status is not `failed`.
+
+### What a resend records
+
+When a resend finishes, the new outcome is combined with the previous status:
+
+| Previous status | Outcome of the resend | Recorded status |
+| --- | --- | --- |
+| None or `failed` | any | the new outcome |
+| any | `sent` | `sent` |
+| `uncertain` | `uncertain` | `uncertain`, with the new details |
+| `uncertain` | `failed` | still `uncertain`; the failure is noted |
+| `sent` | `failed` or `uncertain` | still `sent`; the failure is noted |
+
+A failed resend cannot clear an uncertain status, because the earlier message may still have been delivered. The menu's recipient picker shows a noted failure, for example `sent 2026-01-15 (a later resend failed)`.
+
+## When someone can receive the email twice
+
+The default `pending` policy never sends to a recipient whose history says `sent` or `uncertain`. A recipient can only receive the email again when one of these happens:
+
+- **You choose `force-all`.** Everyone in the list is sent again, including people who already have the email.
+- **You choose `subset` with an address that was already sent.** `subset` ignores history by design.
+- **You resend an uncertain recipient whose first message was in fact delivered.** Check first; see [Uncertain sends](/guides/history#uncertain-sends).
+- **The history no longer matches the list.** The history file is named after the CSV file. Renaming the CSV (or giving it a name that maps to a different history file), copying its rows to another CSV, or deleting the `.state/` folder starts a fresh history, and `pending` then sends to everyone in it.
+
+<Warning>
+`force-all` in live mode re-sends to every recipient in the list. The menu's live confirmation states how many of the recipients were already sent and how many are uncertain; `mailroll send` does not ask. Use a dry-run with the same options first to see the counts.
+</Warning>
+
+## Send to specific recipients
+
+Use `subset` to send to a few chosen addresses, for example to resolve uncertain sends after checking them, or to send a single real message. `--cc ""` sends without CC instead of asking:
+
+```bash Terminal
+npx mailroll send -c acme/onboarding -t welcome \
+  --connection outlook-1 -m live --confirm --cc "" \
+  --policy subset \
+    --recipients ada@example.com,grace@example.com
+```
+
+- Each address must be valid, or the command stops before anything happens.
+- An address that is not in the list is reported as skipped with `requested, but not in this list (or rejected by the template validator)`. A row that the validator rejects is not in the list for this purpose.
+- With several lists (`--data a.csv,b.csv` or several templates), the same addresses apply to every list.
+
+## Skipped rows
+
+The `skipped` count in the summary combines two different things:
+
+- **Rows the validator rejected.** The template's validator refused the row, or the row repeats an address seen earlier in the same CSV (`duplicate email in source (kept the first occurrence)`; the first occurrence is used). These rows are never sent under any policy until you fix the CSV or the validator. `mailroll status` reports them as `row(s) rejected`.
+- **Rows the policy skipped.** The row is valid, but the policy did not select it: already sent, not a previous failure, not selected, or held because it is uncertain.
+
+Only one kind of skip makes the run need attention: an uncertain recipient that the policy held back. The summary lists it as `still UNCERTAIN`.
+
+## Needs attention
+
+A list needs attention when at least one of its recipients:
+
+- failed in this run,
+- became uncertain in this run,
+- was not attempted (the run stopped, or the connection was quarantined or stopped), or
+- is still uncertain from an earlier run and was held back by `pending` or `failed-only`,
+
+or when the provider accepted a message but rejected its CC and the template requires one (`"ccPolicy": "required"`). A rejected optional CC does not count by itself. A recipient with a rejected CC is `sent` and is never sent again because of it; see [Rejected CC](/guides/history#rejected-cc).
+
+When any list needs attention, `mailroll send` exits with `1` and `needsAttention` is `true` in the `--json` output. Rows rejected by the validator and recipients skipped because they were already sent do not count. An uncertain recipient keeps the run in this state until you resolve it; see [Uncertain sends](/guides/history#uncertain-sends).
+
+## Related
+
+- [Send history](/guides/history): what is recorded, uncertain sends and locks.
+- [Send a campaign](/guides/sending): modes, CC and pacing.
+- [`mailroll status`](/cli/status): the state of every list without sending.
+- [`mailroll send` options](/cli/send#options).

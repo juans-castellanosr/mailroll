@@ -1,0 +1,109 @@
+---
+title: "Add an integration"
+description: "Install an integration package in your project, list it in mailroll.json, and point a connection at it."
+icon: "puzzle"
+---
+
+An integration teaches mailroll a way to send. mailroll includes none: every integration, the official [`@mailroll/outlook`](/guides/outlook) included, is an npm package that you install in your project and declare in `mailroll.json`; mailroll then loads it from your project, checks it, and uses it for every connection whose `kind` is the integration's id. Official and third-party integrations are activated in exactly the same way.
+
+<Warning>
+Activating an integration runs its code on your machine, with your permissions: it can read your environment, your `.env` file and your files. mailroll checks that an integration is well formed and keeps to its contract, but it is not a sandbox. Only install integrations you trust.
+</Warning>
+
+## Activate an integration
+
+<Steps>
+  <Step title="Install mailroll and the integration in your project">
+    Both must be dependencies of the same project, in its `package.json`:
+
+    ```bash
+    npm install mailroll acme-mailroll-sender
+    ```
+  </Step>
+  <Step title="List the integration in mailroll.json">
+    Create `mailroll.json` next to that `package.json`:
+
+    ```json mailroll.json
+    { "integrations": ["acme-mailroll-sender"] }
+    ```
+
+    Each entry is the name of an installed package, or a subpath it exports (for example `@acme/mailroll/sender`). Relative paths and URLs are not accepted.
+  </Step>
+  <Step title="Point a connection at it">
+    Set the connection's `kind` to the integration's id, and its `settings` to whatever the integration documents:
+
+    ```json campaigns/acme/onboarding/connections/acme-1.json
+    { "id": "acme-1", "kind": "acme-sender", "mailbox": "sender@example.com" }
+    ```
+  </Step>
+  <Step title="Run mailroll from the project">
+    Run the copy of mailroll installed in the project, from the project folder or any folder below it: `npx mailroll`, `pnpm exec mailroll`, or `yarn mailroll`.
+  </Step>
+</Steps>
+
+To deactivate an integration, remove it from `mailroll.json`. It can stay installed: mailroll never loads a package that is not listed, and a connection that still uses it is refused with a clear message.
+
+## How mailroll finds and checks integrations
+
+When you send (in any mode, dry runs included), mailroll:
+
+1. Finds your project, going up from the folder you run mailroll in: the first folder that has a `mailroll.json` or a `package.json` listing `mailroll` in `dependencies`, `devDependencies` or `optionalDependencies`. A `mailroll.json` must sit next to that `package.json`; anywhere else it is an error, so it is never ignored by accident. Other `package.json` files on the way up, even unreadable ones, do not matter.
+2. Checks that every listed integration is also declared in that `package.json`. A package that is only reachable by accident, for example through another package's dependencies, is refused before anything is loaded.
+3. Checks that it is running the copy of mailroll installed in the project. A global or different copy is refused, because integrations must share the project's mailroll.
+4. Loads each integration through a small helper file it keeps at `node_modules/.cache/mailroll/import.mjs`, so packages resolve from your project exactly as your own code would. The file has fixed content: mailroll writes it once, replaces it only if it was changed, and otherwise only reads it.
+5. Validates each integration and its contract version. An integration built for a sender contract this version of mailroll does not support is refused.
+6. Refuses two active integrations with the same id, and names both.
+
+If several integrations cannot load, mailroll lists every one of them with its own reason, and sends nothing.
+
+A dry run loads and checks the integrations, so configuration mistakes show up early. Loading a package runs its top-level code, but a dry run never prepares or uses an integration: nothing is sent and nothing is signed in.
+
+Which integrations are active depends on the folder you run mailroll from, not on `--campaigns`: run it from the project (or a folder below it) so the same `mailroll.json` applies every time.
+
+Without a `mailroll.json` no integration is active and nothing is loaded from your project. A dry run then stops at the first connection whose integration is not active, so declare the integrations even before your first preview.
+
+## Package managers
+
+| Package manager | Notes |
+| --- | --- |
+| npm, pnpm, Yarn 1 | Run `npx mailroll`, `pnpm exec mailroll` or `yarn mailroll` from the project. |
+| Yarn with Plug'n'Play | Run `yarn mailroll`: running mailroll with plain `node` skips the Plug'n'Play setup and nothing can be resolved. mailroll still creates `node_modules/.cache/mailroll/` for its helper file, even though Plug'n'Play projects have no other `node_modules`. |
+| Workspaces (monorepos) | Install mailroll and the integrations in the workspace package that runs the campaigns, put `mailroll.json` next to its `package.json`, and run mailroll from there. A `mailroll.json` at the repository root is not used unless that root itself lists mailroll. |
+
+Package managers handle an integration that requires another version of mailroll differently: npm refuses to install it, pnpm and Yarn warn, and Bun says nothing. mailroll itself checks the contract version each integration declares, so an incompatible one is refused when it loads.
+
+Integrations must be published as JavaScript. Node.js does not run TypeScript from `node_modules`, and mailroll reports it when an integration, or one of its dependencies, loads TypeScript from there.
+
+Running Node.js with `--preserve-symlinks` (for example through `NODE_OPTIONS`) in a pnpm project makes the project's mailroll look like a different copy, so mailroll refuses to activate integrations. Run it without that option.
+
+## Error messages
+
+| Message | What to do |
+| --- | --- |
+| `… lists "x", which is not declared in …/package.json` | Install the package in the project, for example `npm install x`. |
+| `… mailroll.json must sit next to the package.json that installs mailroll` | Move `mailroll.json` next to the `package.json` that lists mailroll, or install mailroll in that package. |
+| `"x" is not installed or cannot be resolved from the project` | Install the dependencies (`npm install`), or check the name in `mailroll.json`. |
+| `"x" has no importable entry for this specifier` | Use a name or subpath that the package exports. |
+| `"x" loads TypeScript from node_modules …` | The integration or one of its dependencies ships TypeScript; use a JavaScript build of it. |
+| `"x" failed while loading: …` | The integration threw an error, or one of its own dependencies is missing or hides the file it needs; see the rest of the message. |
+| `"x" has no default export; it is not a mailroll integration` | The package is not a mailroll integration, or the entry is the wrong subpath. |
+| `… is not a valid mailroll integration: …` | The integration is malformed or built for an unsupported contract; update the integration or mailroll. |
+| `two active integrations share the id "x" (…)` | Remove one of the two from `mailroll.json`. |
+| `this mailroll is not the copy installed in the project` | Run the project's copy: `npx mailroll`, `pnpm exec mailroll` or `yarn mailroll`. |
+| `cannot create the integration import helper in …` | Make `node_modules/.cache/mailroll` writable for one run; after that mailroll only reads it. |
+| `cannot replace the integration import helper at …` | Another program has the helper file open; close it and run mailroll again. |
+| `connection "c" uses the integration "x", which is not active` | List the integration in `mailroll.json`, or change the connection's `kind`. |
+
+## What mailroll records from a sender
+
+These rules come from the `sender/0` contract, which mailroll 0.2 does not change. They decide what ends up in the [send history](/guides/history#evidence-for-tracing).
+
+- **`attemptId` and `call`.** Each send intent gets one `attemptId`, and every call for that intent receives the same `attemptId` with an increasing `call` number. mailroll calls again only after a definite rejection that allows a retry, such as `transient` or `throttled`. An `unknown` outcome is never retried. Use the `attemptId` to tag the message with your provider, so it can be found later.
+- **`providerMessageId`.** Optional. When present it must be non-empty text, and it is recorded unchanged with the sent recipient. It is evidence for tracing, not proof of delivery.
+- **`ccRejected`.** Only a sender whose `recipientAcceptance` is `per-recipient` reports it, and only when the message has a CC. It is then required, and it lists the CC addresses the provider refused: an empty list when it refused none. It may only name CC addresses of that message, each once. A sender with `recipientAcceptance: "transaction"` must leave it out.
+- **An answer that breaks these rules** is treated as an unknown outcome: the send is recorded as uncertain and is not repeated on its own, because the message may already have been accepted.
+
+## Related
+
+- [Files mailroll reads and writes](/reference/files)
+- [Configuration reference](/reference/configuration)

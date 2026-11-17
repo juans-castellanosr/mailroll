@@ -1,0 +1,166 @@
+---
+title: "Send a campaign"
+description: "Choose between dry-run, test and live, check everything before the first send, and understand pacing, retries and throttling."
+icon: "send"
+---
+
+Every run has a mode: `dry-run` renders messages without sending them, `test` sends every message to one test inbox, and `live` sends to the real recipients. Read this page before your first real send: it covers what each mode does, the checks that run before anything leaves your mailbox, and how mailroll paces and retries sends.
+
+## Compare the modes
+
+All three modes go through the same steps. They read the same CSV, run the same validator and renderer, and apply the same resend policy against the list's history. They differ in where messages go and in what is recorded.
+
+| Behavior | Modes |
+| --- | --- |
+| Needs connection secrets and a Microsoft sign-in | `test`, `live` |
+| Calls Microsoft Graph | `test`, `live` |
+| Delivers to the real recipients | `live` |
+| Delivers every message to one test inbox | `test` |
+| Delivers CC copies | `test`, `live` |
+| Shows the CC in preview files | `dry-run` with `--write-previews` |
+| Waits `delayBetweenSendsMs` between sends | `test`, `live` |
+| Retries network failures and waits out throttling | `test`, `live` |
+| Applies `--policy` against the list's history | all three |
+| Writes history | `live` |
+| Locks the list against other runs | `live` |
+| Needs `--confirm` | `live` |
+
+### dry-run
+
+A dry-run renders every planned message and sends nothing. It does not need secrets or a sign-in, it does not wait between messages, and it does not touch history. With `--write-previews`, each message is written as an HTML file under `previews/<template>/<list>/` (change the root with `--previews-dir`). Each list's preview folder is deleted when that list starts, so it always holds the latest run only.
+
+Each preview file starts with a comment that shows what Microsoft Graph would receive:
+
+```html previews/welcome/recipients/0001-ada@example.com.html wrap
+<!-- DRY RUN preview | to: ada@example.com | cc: team@example.com | subject: Welcome to Acme -->
+```
+
+In the summary, `rendered` counts the messages that rendered successfully. A dry-run is the cheapest way to find rendering errors, because during a real send a rendering error stops the list after earlier messages have already gone out.
+
+### test
+
+A test run sends real email through Microsoft Graph, but every message goes to one test inbox instead of to its recipient. Each message is still rendered for its real recipient, so you see exactly what that person would get. The test inbox comes from `--to`, or from `TEST_RECIPIENT` when `--to` is absent.
+
+Two behaviors surprise people:
+
+- **The CLI uses the `pending` policy by default, in test mode too.** Test runs read the list's history but never write it. After a live run, a test run with the default policy only renders recipients who are still pending. Pass `--policy force-all` to render everyone, or `--policy subset --recipients <email>` to send a single sample.
+- **CC copies are delivered.** If the run has a CC, the CC addresses receive every test message. Pass `--cc ""` to test without CC.
+
+### live
+
+A live run sends to the real recipients and records every outcome in the list's history. It requires `--confirm`, signs in to every connection, and locks each list before the first message goes out. The history is what makes the next run safe; see [Run again safely](/guides/resending) and [Send history](/guides/history).
+
+<Warning>
+A live send cannot be undone. Run a dry-run and a test run first, and read the summary of each.
+</Warning>
+
+## Recommended flow
+
+Work through the modes in order. Each step catches problems that the next one would otherwise make expensive.
+
+<Steps>
+  <Step title="Preview with a dry-run">
+    Render every message and save the HTML so you can open a few in a browser. `--cc ""` answers the [CC](#cc) question up front, so the run does not stop to ask:
+
+    ```bash Terminal
+    npx mailroll send -c acme/onboarding -t welcome \
+      --connection outlook-1 -m dry-run \
+      --cc "" --write-previews
+    ```
+
+    The summary goes to stdout:
+
+    ```text Output wrap
+    acme/onboarding — dry-run
+      welcome · recipients.csv [pending] ok: rendered 3, failed 0, uncertain 0, not attempted 0, skipped 1
+        previews: previews/welcome/recipients
+    ```
+
+    Here `skipped 1` is the example row `not-an-address`, which the template's validator rejects. Check that `skipped` matches the rows you expect to be rejected, and open a few preview files.
+  </Step>
+  <Step title="Send a test to yourself">
+    Send one message per list to your own inbox, without CC:
+
+    ```bash Terminal
+    npx mailroll send -c acme/onboarding -t welcome \
+      --connection outlook-1 -m test \
+      --to you@example.com --policy subset \
+        --recipients ada@example.com --cc ""
+    ```
+
+    The first test or live run in a terminal starts a Microsoft sign-in for each connection; see [Connect Outlook](/guides/outlook#sign-in). Check the message in Outlook: subject, images, links and the sender address.
+  </Step>
+  <Step title="Send for real">
+    Send to everyone who has not received the email yet, again without CC:
+
+    ```bash Terminal
+    npx mailroll send -c acme/onboarding -t welcome \
+      --connection outlook-1 -m live --confirm --cc ""
+    ```
+
+    ```text Output wrap
+    acme/onboarding — live
+      welcome · recipients.csv [pending] ok: sent 3, failed 0, uncertain 0, not attempted 0, skipped 1
+        history: campaigns/acme/onboarding/templates/welcome/.state/recipients.json
+    ```
+
+    When a list needs attention, the summary lists each affected recipient and the reason, and the command exits with `1`. See [Run again safely](/guides/resending) for what to do next.
+  </Step>
+</Steps>
+
+You can do the same steps from the guided menu: run `npx mailroll` in a terminal and choose **QA** (dry-run with previews), **Stage** (test) or **Live**. The menu asks for a final confirmation before a live send. See [CLI overview](/cli/overview).
+
+## Checks before the first send
+
+mailroll prepares the whole run before it sends anything. If any of these checks fails, the run stops and nothing is sent:
+
+1. **Options.** Required options are present, options that do not apply to the mode or policy are rejected, and every address in `--cc`, `--to` and `--recipients` is valid.
+2. **Campaign and connections.** The campaign exists, and every chosen connection exists in the campaign and is declared in each template's `connectionIds`.
+3. **Each list.** The CSV is found, the template plugin loads and prepares (once per template), mailroll takes a SHA-256 fingerprint of the CSV, the CSV is parsed and every row goes through the template's validator, and the list's history is loaded. A malformed CSV or a damaged history stops the run here; rows the validator rejects are only skipped.
+4. **Previews.** Two lists that would write to the same preview folder are rejected.
+5. **Secrets.** In test and live modes, every connection has its `TENANT_ID` and `CLIENT_ID` variables. See [Connection secrets](/reference/environment#connection-secrets).
+6. **CC.** The CC of each list is resolved, prompting you at most once, and checked against the template's `ccPolicy`. See [CC](#cc).
+7. **Sign-in.** In test and live modes, mailroll gets a token for every connection, signing you in if needed.
+8. **Locks.** In live mode, mailroll locks every list. See [Locks](/guides/history#locks).
+
+The lists then run one after another. Before each list starts, mailroll fingerprints its CSV again. If the file changed since the run was prepared, the run stops before that list sends anything.
+
+These checks do not render messages. Rendering happens message by message during the run, so a template error such as a missing placeholder value surfaces only when the first affected message is built. That is why the dry-run comes first.
+
+## CC
+
+Each list's CC comes from `--cc` (`--cc ""` means none), otherwise from the template's `cc`, otherwise from one question for the whole run; the template's `ccPolicy` then decides whether that CC is allowed. Without a terminal the question cannot be asked and the run stops, in every mode, so pass `--cc` in scripts. [CC policy and CC addresses](/reference/configuration#cc-policy-and-cc-addresses) has the complete rules and errors.
+
+What happens to the CC depends on the mode: a dry-run only writes it into the preview header, while test and live runs deliver a copy of every message to each CC address.
+
+## Pacing
+
+Each template can set a `pacing` object in its `template.config.json`; see [Pacing](/reference/configuration#pacing) for the fields and their defaults. When the run uses several connections, recipients are assigned to them in turn, and each connection works through its share in parallel with the others.
+
+Within one connection, messages go out one at a time. Before every message except the first one that connection sends in each list, it waits `delayBetweenSendsMs` (250 ms by default) after the previous send finished. Dry-runs skip the delay.
+
+## Retries and throttling
+
+Test and live sends go through a retry layer that sorts every failure from Microsoft Graph into one category. Only two categories are retried:
+
+- **Pre-send network failures** (`transient`): mailroll could not reach Microsoft Graph at all, so the message cannot have been sent. Examples are a DNS failure, a refused connection, an unreachable network, a connect timeout or a TLS certificate error. These are retried up to `maxRetries` times (3 by default). Before retry *n* (counting from 0), mailroll waits a random time between 0 and `min(baseBackoffMs × 2^n, maxBackoffMs)`. With the defaults that is up to 0.5 s, then 1 s, then 2 s. When the retries run out, the recipient is marked failed.
+- **Throttling** (`throttled`): HTTP 429, or HTTP 503 with a readable `Retry-After` header. mailroll waits the time given in `Retry-After` (seconds or an HTTP date). If there is no usable value, it waits `max(1000 ms, baseBackoffMs) × 2^n`, where *n* counts the throttling waits for this message so far. Each wait is capped at `maxRetryAfterMs` (15 minutes by default). Throttling waits do not count against `maxRetries`. The total wait per message is limited by `maxThrottleWaitMs` (1 hour by default). When the next wait would exceed it, the recipient is marked failed with a message ending in `still throttled after waiting N s (limit M s)`.
+
+Everything else is never retried:
+
+- **Uncertain**: the message may or may not have been sent, so retrying could send it twice. [Uncertain sends](/guides/history#uncertain-sends) lists every cause.
+- **Authentication** (`auth`): getting a token failed, or Graph answered 401 or 403. The connection is quarantined for the rest of the list, and its remaining recipients in that list are reported as not attempted.
+- **Permanent** (`permanent`): any other unsuccessful HTTP response, or an unexpected error. The recipient is marked failed.
+
+Failed recipients have not received the message, and the next run with the default `pending` policy sends to them again.
+
+## Stopping a run
+
+Press Ctrl-C once to stop gracefully. Sends already in progress finish and are recorded, nothing new starts, and the summary is printed. The exit code is `130`. Press Ctrl-C a second time to quit at once. See [Interruptions and Ctrl-C](/guides/history) for what each case leaves in the history.
+
+## Related
+
+- [Run again safely](/guides/resending): choose who a run sends to.
+- [Send history](/guides/history): uncertain sends, locks and interruptions.
+- [Automate runs](/guides/automation): run sends from scripts and schedulers.
+- [`mailroll send`](/cli/send): every option.

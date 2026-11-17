@@ -1,0 +1,717 @@
+---
+title: "Node.js SDK"
+description: "Run campaigns, read list status, handle results and cancellation, and build your own backend with the mailroll package."
+icon: "code"
+---
+
+The `mailroll` package exposes in code everything the CLI does: it runs a selection of lists in dry-run, test or live mode, reads the status of every list, and reports what happened to each recipient. It works with any framework or none, and it includes everything in [`mailroll/core`](/sdk/browser).
+
+Use it on a server or workstation that has your campaign folder, the [connection secrets](/reference/environment#connection-secrets) and the token cache. For which entry point fits where, see [SDK overview](/sdk/overview).
+
+## How a run works in code
+
+A run goes through two calls:
+
+1. `buildSelection` checks a selection (which campaign, which lists, which connections, which mode and policy) without touching the disk, and returns it normalized. It throws `ConfigError` if anything is missing or malformed.
+2. `runSelection` loads the campaign, prepares and validates every list, signs in to every connection, takes the locks (live only), and only then sends. It returns one result per list.
+
+`runSelection` calls `buildSelection` itself, so the first call is optional. Calling it first is useful when you want to reject a bad request before doing any work, for example in an HTTP handler.
+
+This dry run renders every message of the `welcome` template without sending anything, and prints a line per list:
+
+```ts
+import {
+  ConsoleLogger,
+  needsAttention,
+  runSelection,
+} from 'mailroll';
+import outlook from '@mailroll/outlook';
+
+const results = await runSelection(
+  {
+    campaignId: 'acme/onboarding',
+    targets: [{ templateId: 'welcome' }],
+    connectionIds: ['outlook-1'],
+    policy: { kind: 'pending' },
+    mode: { kind: 'dry-run' },
+  },
+  {
+    campaignsRoot: 'campaigns',
+    logger: new ConsoleLogger({ level: 'warn' }),
+    previewDir: 'previews',
+    integrations: [outlook],
+  },
+);
+
+for (const { templateId, dataFile, report } of results) {
+  const flag = needsAttention(report) ? ' (needs attention)' : '';
+
+  const counts = `rendered ${String(report.sent)}, skipped ${String(report.skipped)}`;
+
+  console.log(`${templateId} · ${dataFile}: ${counts}${flag}`);
+}
+```
+
+- `targets: [{ templateId: 'welcome' }]` picks the template's default CSV: `recipients.csv`, or the only CSV in its `data/` folder.
+- `previewDir: 'previews'` writes one HTML file per message. Without it, a dry run renders every message and writes nothing.
+- In a dry run, `report.sent` counts rendered messages.
+
+## Selection
+
+The first argument of `runSelection` and the only argument of `buildSelection`. Addresses in it are `EmailAddress` values; get them from `parseEmailAddress`, which also normalizes them. JavaScript callers are checked at runtime as well: a wrong value fails with a `ConfigError` that names the field, such as `invalid selection: cc.0: email is not a valid address (invalid domain)`.
+
+<ResponseField name="campaignId" type="string" required>
+  The campaign id, `<group>/<name>`.
+
+  **Constraints:** not empty (`a campaign is required`). `runSelection` fails with `campaign "…" not found` if no such campaign exists under `campaignsRoot`.
+</ResponseField>
+
+<ResponseField name="targets" type="TemplateTarget[]" required>
+  The lists to run, in order. Each target is one template and one CSV.
+
+  **Constraints:** at least one (`select at least one template`). Two targets with the same `templateId` and the same `dataFile` count once; the first wins. A target without `dataFile` and one naming the default CSV are not merged, so name each list one way.
+
+  Each `TemplateTarget` has these fields:
+
+  <ResponseField name="templateId" type="string" required>
+    The template folder name.
+  </ResponseField>
+  <ResponseField name="dataFile" type="string">
+    The CSV file name in the template's `data/` folder, such as `recipients.csv`.
+
+    **When omitted:** `recipients.csv` if it exists, else the only CSV. With several CSVs and none named `recipients.csv`, the run fails with `has multiple CSV files; choose one with --data (…)`.
+  </ResponseField>
+  <ResponseField name="policy" type="ResendPolicy">
+    The resend policy for this list only.
+
+    **When omitted:** the selection's `policy`.
+  </ResponseField>
+  <ResponseField name="cc" type="EmailAddress[]">
+    The CC for this list only. An empty array means no CC.
+
+    **When omitted:** the selection's `cc`, then the template's `cc`, then `resolveCc`.
+  </ResponseField>
+  <ResponseField name="dataFingerprint" type="string">
+    The SHA-256 hex digest of the CSV as it was when someone reviewed it. If the file now differs, the run fails before sending with `… changed after you reviewed it; nothing was sent — review it again`.
+
+    **When omitted:** no review check. The file is still fingerprinted when the run is prepared and checked again before the list is sent.
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="connectionIds" type="string[]" required>
+  The connections to send through. Recipients are distributed among them in turn, and each connection sends its share in parallel.
+
+  **Constraints:** at least one (`select at least one connection`); duplicates are removed. Each must exist in the campaign and be listed in every selected template's `connectionIds`.
+</ResponseField>
+
+<ResponseField name="policy" type="ResendPolicy" required>
+  Which recipients to send to, given the list's history.
+
+  **Values:** `{ kind: 'pending' }`, `{ kind: 'failed-only' }`, `{ kind: 'force-all' }`, or `{ kind: 'subset', recipients }` with at least one address. See [Choose a policy](/guides/resending#choose-a-policy).
+</ResponseField>
+
+<ResponseField name="mode" type="RunMode" required>
+  How messages are delivered.
+
+  **Values:** `{ kind: 'dry-run' }`, `{ kind: 'test', testRecipient }` (every message goes to `testRecipient`), or `{ kind: 'live' }`. See [Compare the modes](/guides/sending#compare-the-modes).
+</ResponseField>
+
+<ResponseField name="cc" type="EmailAddress[]">
+  The CC for every list of the run that has no `cc` of its own. An empty array means no CC and overrides the templates' default `cc`.
+
+  **When omitted:** each template's `cc`, then `resolveCc`. The full rules, including `ccPolicy`, are in [Configuration files](/reference/configuration).
+</ResponseField>
+
+## Options
+
+The second argument of `runSelection`.
+
+<ResponseField name="campaignsRoot" type="string" required>
+  The folder that holds the campaigns. A relative path is resolved against the current working directory.
+</ResponseField>
+
+<ResponseField name="logger" type="Logger" required>
+  Receives structured progress events such as `recipient.sent` or `state.journal_kept`. `ConsoleLogger` writes them as JSON lines to stderr and redacts fields whose names look sensitive; you can pass any object with `info`, `warn` and `error` methods.
+</ResponseField>
+
+<ResponseField name="previewDir" type="string">
+  In dry-run mode, the folder where each rendered message is written as an HTML file. Each list's own subfolder is emptied before the list runs. See [Previews](/reference/files).
+
+  **When omitted:** a dry run renders every message and writes nothing. Ignored in test and live mode.
+</ResponseField>
+
+<ResponseField name="env" type="NodeJS.ProcessEnv">
+  Where the connection secrets and `TOKEN_CACHE_PATH` are read.
+
+  **When omitted:** `process.env`. The SDK never loads a `.env` file itself.
+</ResponseField>
+
+<ResponseField name="signIn" type="'device-code' | 'cached-only'" default="'device-code'">
+  What happens when a connection has no usable saved sign-in, in test and live mode.
+
+  **Values:**
+  - `'device-code'`: let the integration start an interactive sign-in (Outlook starts a Microsoft device-code sign-in) and wait for a person to complete it. The instructions go to `onSignInMessage`.
+  - `'cached-only'`: never wait for a person; throw `SignInRequiredError` instead. Use it in servers, jobs and anything else without a human watching.
+
+  **When omitted:** `'device-code'`. Each integration receives it as its sign-in mode; `@mailroll/outlook` uses it as described.
+</ResponseField>
+
+<ResponseField name="onSignInMessage" type="(message: string) => void">
+  Receives the sign-in instructions (`Sign in as <mailbox> (connection "<id>"). …`, followed by Microsoft's device-code message) and notices about a saved sign-in that cannot be read.
+
+  **When omitted:** the messages are written to stderr.
+</ResponseField>
+
+<ResponseField name="resolveCc" type="(params: { required: boolean }) => Promise<EmailAddress[]>">
+  Supplies a CC when a list has none. See [Resolving CC](#resolving-cc).
+
+  **When omitted:** lists without a CC are sent without one; a live run of a `"ccPolicy": "required"` template without a CC fails before sending.
+</ResponseField>
+
+<ResponseField name="signal" type="AbortSignal">
+  Stops the run. See [Cancellation](#cancellation).
+
+  **When omitted:** the run can only end by finishing or failing.
+</ResponseField>
+
+<ResponseField name="integrations" type="unknown[]">
+  The sender integrations the run activates. Each one is checked with `validateIntegrationDescriptor` from `mailroll/core`, the same check for official and third-party integrations, and every connection uses the integration whose `id` matches its `kind`. Every run, dry runs included, stops before sending anything when a connection's integration is not in the list or rejects the connection's settings; test and live runs then sign each connection in through its integration.
+
+  mailroll includes no integration. To send through Outlook, install `@mailroll/outlook` and pass its default export, next to any integration of your own: `[outlook, myIntegration]` after `import outlook from '@mailroll/outlook'`. The SDK does not read `mailroll.json`; that file is how the CLI activates integrations.
+
+  **When omitted:** no integration is active, so any run, dry runs included, stops at the first connection with `connection "…" uses the integration "…", which is not active (active: none)`.
+</ResponseField>
+
+<ResponseField name="now" type="() => string">
+  Returns the current time as an ISO 8601 string. It stamps the `at` fields of results and history.
+
+  **When omitted:** the system clock.
+</ResponseField>
+
+## Results
+
+`runSelection` resolves to one `TemplateRunResult` per list, in the order of `targets`:
+
+```typescript TemplateRunResult
+interface TemplateRunResult {
+  templateId: string;
+  dataFile: string; // the CSV actually used
+  policy: 'pending' | 'failed-only' | 'force-all' | 'subset';
+  statePath: string; // snapshot file; only live runs write it
+  previewDir?: string; // dry runs with previewDir only
+  report: RunReport;
+  history: RunHistory;
+}
+
+type RunHistory =
+  | { before: HistoryPresence; upgraded: false; unconfirmed?: true }
+  | { before: 'v1'; upgraded: true; backups: readonly string[] };
+
+type HistoryPresence = 'none' | 'v1' | 'v2';
+```
+
+`history` tells you the format of the list's history when the list started (`before`) and whether this run upgraded it from the format of mailroll 0.1. `upgraded` is `true` only after a live run found the v2 snapshot and the backups on disk; `unconfirmed` marks a live run of a v1 list whose upgrade could not be confirmed. `RunHistory` and `HistoryPresence` are exported as types from `mailroll`. See [Upgrade from the v1 format](/reference/files#upgrade-from-the-v1-format).
+
+The `report` accounts for every row of the CSV and every requested subset address:
+
+<ResponseField name="total" type="number">
+  Number of entries in `results`.
+</ResponseField>
+<ResponseField name="sent" type="number">
+  Messages sent. In a dry run, messages rendered; in a test run, messages sent to the test inbox.
+</ResponseField>
+<ResponseField name="failed" type="number">
+  Messages Microsoft refused, or that failed after their retries.
+</ResponseField>
+<ResponseField name="uncertain" type="number">
+  Messages that the provider may or may not have accepted. See [Uncertain sends](/guides/history#uncertain-sends).
+</ResponseField>
+<ResponseField name="notAttempted" type="number">
+  Recipients that were planned but never sent, because the run was stopped or hit an error, a connection's authentication failed, or a connection had three uncertain sends in a row.
+</ResponseField>
+<ResponseField name="skipped" type="number">
+  Rows the template validator rejected, duplicate rows, and recipients the policy left out.
+</ResponseField>
+<ResponseField name="heldUncertain" type="number">
+  The part of `skipped` held back because an earlier send to them is uncertain.
+</ResponseField>
+<ResponseField name="ccRejectedMessages" type="number">
+  Sent messages whose CC the provider rejected, counted once per message however many CC addresses it lost. Only integrations that report each recipient separately produce them.
+</ResponseField>
+<ResponseField name="requiredCcRejectedMessages" type="number">
+  The part of `ccRejectedMessages` whose template required a CC (`"ccPolicy": "required"`) when the message was sent.
+</ResponseField>
+<ResponseField name="results" type="SendResult[]">
+  One entry per recipient or rejected row, with `status` `sent`, `failed`, `uncertain`, `not-attempted` or `skipped`. Skips left by the policy carry a `code`: `already-sent`, `held-uncertain`, `not-selected`, `not-in-list` or `not-failed`. Sent, failed and uncertain results carry `attemptId` when the integration received one; sent results also carry `providerMessageId` and `cc` when the integration reported them. They are evidence for tracing, not proof of delivery.
+</ResponseField>
+
+`needsAttention(report)` is `true` when `failed`, `uncertain`, `notAttempted`, `heldUncertain` or `requiredCcRejectedMessages` is above zero. A rejected optional CC does not count by itself. Rows the validator rejected do not count. When it is `true` for any list, the CLI exits with code `1`, unless the run was stopped with Ctrl-C, which exits with `130`. Errors also exit with `1`; see [Exit codes](/cli/overview#exit-codes).
+
+Only live runs record history. A test run sends real messages, to the test inbox and the CC, but leaves the list's history unchanged.
+
+## Live runs without a person
+
+A server, a scheduled job or any other process without a human watching should run with `signIn: 'cached-only'` and pass every decision explicitly. Sign in once beforehand from a terminal, for example with a test send, so the token cache exists. See [Sign in](/guides/outlook#sign-in).
+
+This live run sends the pending recipients of one list, with a fixed CC, and stops cleanly on `SIGTERM`:
+
+```ts
+import {
+  ConsoleLogger,
+  needsAttention,
+  parseEmailAddress,
+  runSelection,
+} from 'mailroll';
+import outlook from '@mailroll/outlook';
+
+const cc = parseEmailAddress('records@example.com');
+
+if (!cc.ok) {
+  throw new Error(cc.reasons.join('; '));
+}
+
+const controller = new AbortController();
+
+process.once('SIGTERM', () => {
+  controller.abort();
+});
+
+const results = await runSelection(
+  {
+    campaignId: 'acme/onboarding',
+    targets: [{ templateId: 'welcome', dataFile: 'recipients.csv' }],
+    connectionIds: ['outlook-1'],
+    policy: { kind: 'pending' },
+    mode: { kind: 'live' },
+    cc: [cc.value],
+  },
+  {
+    campaignsRoot: 'campaigns',
+    logger: new ConsoleLogger(),
+    integrations: [outlook],
+    signIn: 'cached-only',
+    signal: controller.signal,
+  },
+);
+
+process.exitCode =
+  controller.signal.aborted ||
+  results.some((r) => needsAttention(r.report))
+    ? 1
+    : 0;
+```
+
+- `dataFile` is named explicitly, so adding a second CSV to the template later does not break the job.
+- `cc` is set, so `resolveCc` is never needed.
+- Before the first message, every connection is signed in and every list is locked. A missing or expired sign-in throws `SignInRequiredError` at that point, with nothing sent.
+
+## Resolving CC
+
+`resolveCc` is how a program answers the question the CLI asks interactively: "which CC should these lists use?"
+
+- It is called **at most once per run**, and only if at least one selected list has no CC from its target, the selection or its template, and its `ccPolicy` is not `forbidden`.
+- `required` is `true` when the run is live and at least one of those lists has `"ccPolicy": "required"`.
+- The addresses you return apply to every one of those lists. Lists with `"ccPolicy": "forbidden"` never receive them.
+- Returning an empty array means no CC. For a live run of a `required` list, the run then fails before sending.
+- It is called after the lists and the connection secrets were checked, and before sign-in.
+
+How the answer combines with each template's `ccPolicy` is described in [CC policy and CC addresses](/reference/configuration#cc-policy-and-cc-addresses).
+
+This option asks for a CC only when the run needs one:
+
+```ts
+import {
+  ConsoleLogger,
+  type EmailAddress,
+  parseEmailAddress,
+  type RunSelectionOptions,
+} from 'mailroll';
+
+const records = parseEmailAddress('records@example.com');
+
+if (!records.ok) {
+  throw new Error(records.reasons.join('; '));
+}
+
+const defaultCc: readonly EmailAddress[] = [records.value];
+
+export const options: RunSelectionOptions = {
+  campaignsRoot: 'campaigns',
+  logger: new ConsoleLogger(),
+  resolveCc: ({ required }) =>
+    Promise.resolve(required ? defaultCc : []),
+};
+```
+
+## Cancellation
+
+Pass an `AbortSignal` as `signal` and abort it to stop a run. Aborting is safe at any moment:
+
+- A device-code sign-in in progress is canceled, and `runSelection` throws `RunCancelledError`.
+- In a list that is sending, no new message starts. A message already on its way to Microsoft is allowed to finish and is recorded normally. Waits between messages and before retries end at once, and the rest of the list is reported as `not-attempted` and stays pending.
+- Lists that have not started are not run. If at least one list produced a result, `runSelection` throws `RunInterruptedError` with the finished results in `completed`, the skipped lists in `notRun`, and a `RunCancelledError` as `cause`.
+
+<Note>
+  If you abort while the **last** list is sending, that list ends early but `runSelection` resolves normally, because no list is left to cancel. Check `signal.aborted` after it resolves, as the live example above does, and treat `not-attempted` recipients as pending.
+</Note>
+
+## Read list status
+
+`getCampaignStatus` reports every list of every campaign under a folder, from history alone, without signing in or sending:
+
+```ts
+import { getCampaignStatus } from 'mailroll';
+
+const campaigns = await getCampaignStatus({
+  campaignsRoot: 'campaigns',
+});
+
+for (const campaign of campaigns) {
+  for (const template of campaign.templates) {
+    const name = `${campaign.campaignId} · ${template.templateId}`;
+
+    if (template.problem !== undefined) {
+      console.error(`${name}: ${template.problem}`);
+      continue;
+    }
+
+    for (const { dataFile, counts } of template.lists) {
+      const pending = String(counts.pending);
+
+      console.log(`${name} · ${dataFile}: ${pending} pending`);
+    }
+  }
+}
+```
+
+- It loads each template's plugin to validate the rows, so a plugin that fails shows up as that template's `problem` instead of failing the whole call. A template without a CSV has the problem `no CSV in data/`.
+- An invalid campaign or template configuration still throws, because the campaigns cannot be loaded at all.
+- `counts` has `total` (rows the validator accepted), `sent`, `failed`, `uncertain`, `pending`, `rejected`, `ccRejectedMessages` and `requiredCcRejectedMessages`. `pending` is `total − sent − uncertain`, so failed recipients count as pending: the `pending` policy would send to them again.
+- Each list also has `evidence`, the history entries that need tracing, and `history` (`"none"`, `"v1"` or `"v2"`). See [`mailroll status`](/cli/status#json-output).
+- The optional `store` option replaces the file-based history with your own `StateStore`. `history` is then absent, because mailroll cannot know how your store keeps its files.
+
+## History stores
+
+A `StateStore` keeps the history of each list. mailroll ships two:
+
+- `FileStateStore` writes the [state files](/reference/files#state-files). It reads histories written by mailroll 0.1, and upgrades one to v2 at its first write. `runSelection` takes the locks for you. When you call `FileStateStore` directly, every write must come from the instance that holds the list's lock and loaded the list after taking it: call `lock(template)`, run the list with `runTemplate` (which loads it), and call `release()` on the lock in a `finally` block. Any other write, or a write after the lock file was deleted, taken over or could not be read, is refused and writes nothing. Called directly, `append` and `compact` throw that refusal as `ConfigError`; inside `runTemplate`, and so `runSelection`, it reaches you as the `cause` of a `StatePersistenceError` whose message starts with `could not record send state`. See [Errors](/sdk/errors). It needs a file system with hard links, for its locks as well as its history.
+- `MemoryStateStore`, from `mailroll/core`, keeps everything in memory.
+
+With any store, `runTemplate` refuses a second live run of the same list on the same store instance while the first is still running, with `ConfigError` and nothing sent.
+
+A store of your own implements four methods:
+
+- `load(template)` returns a `StoredTemplateState`: a v2 `TemplateState`, or a `TemplateStateV1` you stored before 0.2. Callers that need a `TemplateState` pass the result to `upgradeTemplateState`, which copies a v1 state as it is and never invents evidence.
+- `append(template, entry)` stores one journal entry.
+- `compact(template, state)` receives a v2 `TemplateState` and replaces the stored history with it.
+- `lock(template)` gives one run exclusive use of the list.
+
+`foldJournal(snapshot, entries)` replays journal entries over a snapshot exactly as mailroll's own stores do, including turning interrupted intents into uncertain entries:
+
+```ts
+import {
+  emptyState,
+  foldJournal,
+  type RecipientJournalEntry,
+  type ResolvedTemplate,
+  type StateLock,
+  type StateStore,
+  type StoredTemplateState,
+  type TemplateState,
+} from 'mailroll';
+
+export class SimpleHistoryStore implements StateStore {
+  private readonly snapshots = new Map<string, TemplateState>();
+  private readonly journals = new Map<string, RecipientJournalEntry[]>();
+
+  load(template: ResolvedTemplate): Promise<StoredTemplateState> {
+    const snapshot = this.snapshots.get(template.statePath) ?? emptyState(template.id);
+
+    return Promise.resolve(foldJournal(snapshot, this.journals.get(template.statePath) ?? []));
+  }
+
+  append(template: ResolvedTemplate, entry: RecipientJournalEntry): Promise<void> {
+    this.journals.set(template.statePath, [...(this.journals.get(template.statePath) ?? []), entry]);
+
+    return Promise.resolve();
+  }
+
+  compact(template: ResolvedTemplate, state: TemplateState): Promise<void> {
+    this.snapshots.set(template.statePath, state);
+    this.journals.delete(template.statePath);
+
+    return Promise.resolve();
+  }
+
+  lock(): Promise<StateLock> {
+    return Promise.resolve({ release: () => Promise.resolve() });
+  }
+}
+```
+
+A real store must also persist each entry durably before `append` resolves, and must keep its lock exclusive across processes; this example does neither. See [Migrating to 0.2](/migration#history-v2-and-sdk-types) if you wrote a store for mailroll 0.1.
+
+## Build your own backend
+
+mailroll has no HTTP API of its own. If a web application needs to see status or trigger runs, you write the endpoint. This example does it with nothing but `node:http`, and shows the parts that matter for safety:
+
+- It listens only on `127.0.0.1`. Put a TLS-terminating proxy in front of it if anything else must reach it.
+- Every request needs a bearer token from your own `ADMIN_API_TOKEN` variable, compared in constant time.
+- The request body is size-limited and validated before use.
+- The server, not the client, decides the mode and the policy. This one offers only status and dry runs; nothing it does can send email.
+
+```ts
+import { createHash, timingSafeEqual } from 'node:crypto';
+import {
+  createServer,
+  type IncomingMessage,
+  type ServerResponse,
+} from 'node:http';
+import {
+  buildSelection,
+  ConfigError,
+  ConsoleLogger,
+  DataSourceError,
+  getCampaignStatus,
+  needsAttention,
+  RunInterruptedError,
+  runSelection,
+  TemplateRenderError,
+} from 'mailroll';
+import outlook from '@mailroll/outlook';
+
+const campaignsRoot = 'campaigns';
+const maxBodyBytes = 16 * 1024;
+const logger = new ConsoleLogger({ level: 'warn' });
+
+// ADMIN_API_TOKEN belongs to this server, not to mailroll:
+// a long random value shared only with trusted callers.
+const apiToken = process.env['ADMIN_API_TOKEN'] ?? '';
+
+if (apiToken.length < 32) {
+  throw new Error(
+    'set ADMIN_API_TOKEN to a random value of at least 32 characters',
+  );
+}
+
+const expectedDigest = createHash('sha256').update(apiToken).digest();
+
+// Problems with the campaign files, the CSV or the template.
+// Anything else is a bug or an outage and answers 500.
+const inputErrors = [
+  ConfigError,
+  DataSourceError,
+  TemplateRenderError,
+  RunInterruptedError,
+] as const;
+
+function isInputError(error: unknown): error is Error {
+  return inputErrors.some((type) => error instanceof type);
+}
+
+class HttpError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
+function isAuthorized(request: IncomingMessage): boolean {
+  const header = request.headers.authorization;
+
+  if (header === undefined || !header.startsWith('Bearer ')) {
+    return false;
+  }
+
+  // Hashing both sides gives equal-length buffers,
+  // which timingSafeEqual requires.
+  const presented = createHash('sha256')
+    .update(header.slice('Bearer '.length))
+    .digest();
+
+  return timingSafeEqual(presented, expectedDigest);
+}
+
+async function readJsonBody(
+  request: IncomingMessage,
+): Promise<unknown> {
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+
+  for await (const piece of request) {
+    const chunk: unknown = piece;
+
+    if (!(chunk instanceof Uint8Array)) {
+      throw new HttpError(400, 'unexpected request body');
+    }
+
+    size += chunk.byteLength;
+
+    if (size > maxBodyBytes) {
+      throw new HttpError(413, 'request body too large');
+    }
+
+    chunks.push(chunk);
+  }
+
+  try {
+    const body: unknown = JSON.parse(
+      Buffer.concat(chunks).toString('utf8'),
+    );
+
+    return body;
+  } catch {
+    throw new HttpError(400, 'request body is not valid JSON');
+  }
+}
+
+interface DryRunRequest {
+  readonly campaignId: string;
+  readonly templateId: string;
+  readonly connectionId: string;
+}
+
+function toDryRunRequest(body: unknown): DryRunRequest {
+  if (
+    typeof body === 'object' &&
+    body !== null &&
+    'campaignId' in body &&
+    typeof body.campaignId === 'string' &&
+    'templateId' in body &&
+    typeof body.templateId === 'string' &&
+    'connectionId' in body &&
+    typeof body.connectionId === 'string'
+  ) {
+    return {
+      campaignId: body.campaignId,
+      templateId: body.templateId,
+      connectionId: body.connectionId,
+    };
+  }
+
+  throw new HttpError(
+    400,
+    'expected a JSON object with string fields ' +
+      'campaignId, templateId and connectionId',
+  );
+}
+
+async function dryRun(request: IncomingMessage): Promise<unknown> {
+  const input = toDryRunRequest(await readJsonBody(request));
+  // The server fixes mode and policy;
+  // the caller only chooses which list to check.
+  const selection = buildSelection({
+    campaignId: input.campaignId,
+    targets: [{ templateId: input.templateId }],
+    connectionIds: [input.connectionId],
+    policy: { kind: 'pending' },
+    mode: { kind: 'dry-run' },
+  });
+  const results = await runSelection(selection, {
+    campaignsRoot,
+    logger,
+    integrations: [outlook],
+  });
+
+  return results.map(({ templateId, dataFile, report }) => ({
+    templateId,
+    dataFile,
+    rendered: report.sent,
+    skipped: report.skipped,
+    needsAttention: needsAttention(report),
+  }));
+}
+
+async function route(request: IncomingMessage): Promise<unknown> {
+  if (!isAuthorized(request)) {
+    throw new HttpError(401, 'unauthorized');
+  }
+
+  if (request.method === 'GET' && request.url === '/status') {
+    return getCampaignStatus({ campaignsRoot });
+  }
+
+  if (request.method === 'POST' && request.url === '/dry-run') {
+    return dryRun(request);
+  }
+
+  throw new HttpError(404, 'not found');
+}
+
+function reply(
+  response: ServerResponse,
+  status: number,
+  body: unknown,
+): void {
+  response
+    .writeHead(status, {
+      'content-type': 'application/json; charset=utf-8',
+    })
+    .end(JSON.stringify(body));
+}
+
+const server = createServer((request, response) => {
+  route(request).then(
+    (body) => {
+      reply(response, 200, body);
+    },
+    (error: unknown) => {
+      if (error instanceof HttpError) {
+        reply(response, error.status, { error: error.message });
+      } else if (isInputError(error)) {
+        // Written for operators and may include local paths:
+        // fine for trusted callers, not for the public.
+        reply(response, 422, { error: error.message });
+      } else {
+        logger.error('http.unhandled', {
+          error:
+            error instanceof Error ? error.message : 'unknown error',
+        });
+        reply(response, 500, { error: 'internal error' });
+      }
+    },
+  );
+});
+
+server.listen(8080, '127.0.0.1');
+```
+
+- `GET /status` returns the `getCampaignStatus` result as JSON.
+- `POST /dry-run` with `{"campaignId": "acme/onboarding", "templateId": "welcome", "connectionId": "outlook-1"}` renders the list's pending messages and returns counts. It writes no previews, because concurrent requests for the same list would empty each other's preview folder.
+- A problem found while the run is prepared is thrown unchanged: an unknown campaign, template or connection, or a damaged history, as `ConfigError`; a malformed CSV as `DataSourceError`; a missing `view/compiled.html` as `TemplateRenderError`. A message that fails to render during the run stops the list and surfaces as `RunInterruptedError`, with the cause in its message. The server answers all four with `422`. See [Errors](/sdk/errors).
+
+If you add a route that sends, it changes the risk completely: authorize the specific user for the specific campaign, require an explicit confirmation step, take the CC from server-side configuration, run with `signIn: 'cached-only'`, and expect `ConfigError` when another run holds the list's lock.
+
+## Other exports
+
+Beyond the functions above, `mailroll` exports the building blocks the CLI is made of. You rarely need them unless you assemble your own pipeline:
+
+- `discoverCampaigns(root)` loads every campaign, connection and template under a folder.
+- `CsvDataSource` reads a UTF-8 CSV file as rows; `requiredColumns` makes columns mandatory.
+- `FileStateStore` reads and writes the [state files](/reference/files#state-files) of a list.
+- `ConsoleLogger` writes log events as JSON lines, with a minimum `level` and an optional `sink`.
+- `PreviewEmailProvider` writes messages as preview files; `NullEmailProvider` discards them.
+- `loadCompiledTemplate(template)` reads a template's `view/compiled.html` for your plugin.
+- `connectionEnvKey` builds a [connection secret](/reference/environment#connection-secrets) variable name.
+- `connectionStateLocation({ env, campaignId, connectionId })` returns the `stateDirectory` and `stateKey` that a connection's integration receives in `prepare`, for tools that work with the same state outside a run.
+- Everything in [`mailroll/core`](/sdk/browser), such as `parseEmailAddress`, `definePlugin` and `renderWithMarkers`.
+
+## Outlook exports
+
+`@mailroll/outlook` exports the Outlook integration and its building blocks. They used to be exported by `mailroll`; see [Migrating to mailroll 0.2](/migration).
+
+- The default export is the Outlook sender integration, for `integrations` or `mailroll.json`; `createOutlookIntegration` builds one with your own `fetchFn` or sign-in (`authFor`).
+- `OutlookAuthProvider` signs a connection in to Microsoft and keeps its token cache; `outlookTokenCachePath` gives the cache file for a `stateDirectory` and `stateKey`.
+- `OutlookProviderFactory` and `GraphClient` send a message through Microsoft Graph.
+- `SentItemsReader` lists a mailbox's Sent Items, as `mailroll-outlook export-sent` does.
+
+The library needs only `@mailroll/core`; mailroll is required only by the `mailroll-outlook` tool.
+
+## Related
+
+- [Errors](/sdk/errors)
+- [Browser](/sdk/browser)
+- [Sending](/guides/sending)
+- [History](/guides/history)

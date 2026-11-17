@@ -1,0 +1,158 @@
+---
+title: "mailroll-outlook export-sent"
+description: "Reference for mailroll-outlook export-sent, the tool in @mailroll/outlook that saves a connection's Outlook Sent Items to a JSON file: options, output format and exit codes."
+icon: "file-output"
+---
+
+`mailroll-outlook export-sent` reads a connection's Outlook Sent Items folder from a given day onward and saves the messages to a new JSON file. It reads only: it changes nothing in the mailbox and nothing in mailroll's history. [Export Sent Items](/guides/export-sent) explains how to use the file to check uncertain sends.
+
+## mailroll-outlook export-sent
+
+`mailroll-outlook` comes with [`@mailroll/outlook`](/guides/outlook), and it reads your campaigns through the mailroll installed in the same project, so install both and run it from the project. It replaces the former `mailroll export-sent`, with the same options, output and exit codes; see [Migrating to mailroll 0.2](/migration).
+
+Run it from the project that installs both packages. The tool finds mailroll next to its own installation, so `npx -p @mailroll/outlook mailroll-outlook …` from outside the project stops with exit code `2` and asks you to install mailroll there.
+
+The command takes a campaign, one of its connections, a start date and an output file. All four are required, and a run that misses several names all of them at once. Like mailroll, it also accepts `-C, --campaigns <dir>` (the campaigns folder, `campaigns` by default), `--no-color` and `-q, --quiet`, and it reads `.env` from the current folder.
+
+```bash Terminal
+mailroll-outlook export-sent -c <group/name> --connection <id> \
+  --since <YYYY-MM-DD> -o <file>
+```
+
+The command checks the options, then the campaign and connection. It then signs in as the connection's mailbox, reads every matching message, and only then creates the output file.
+
+- **Permissions.** The connection's Microsoft Entra app needs the delegated `Mail.ReadBasic` permission in addition to `Mail.Send`; see [Register an app in Microsoft Entra ID](/guides/outlook#register-an-app-in-microsoft-entra-id). The connection secrets must be set, as for a live send; see [Connection secrets](/reference/environment#connection-secrets).
+- **Sign-in.** In an interactive session the command can start a device-code sign-in for `Mail.ReadBasic`. Without a terminal it only uses a saved sign-in, and stops with exit code `2` if there is none. The signed-in account must be the connection's `mailbox`. See [Sign in](/guides/outlook#sign-in).
+- **What Sent Items contains.** Microsoft keeps a copy of a message sent by mailroll only when the template's `saveToSentItems` setting is `true`; it is `false` when omitted. The export also includes every other message sent from that mailbox in the period.
+
+## Options
+
+<ResponseField name="-c, --campaign <group/name>" type="string" required>
+  The campaign id, such as `acme/onboarding`.
+
+  **Constraints:** the campaign must exist under the campaigns folder, otherwise the command stops with `campaign "…" not found under <dir>`.
+</ResponseField>
+
+<ResponseField name="--connection <id>" type="string" required>
+  The connection whose mailbox is read, by `id`. Only one connection per export.
+
+  **Constraints:** the connection must exist in the campaign, otherwise the command stops with `connection "…" not found in campaign "…"`.
+</ResponseField>
+
+<ResponseField name="--since <YYYY-MM-DD>" type="string" required>
+  The first day to export. The export starts at midnight UTC of that day and includes every message sent at or after that moment, up to now.
+
+  **Constraints:** the value must be a date in exactly the `YYYY-MM-DD` format, otherwise the command stops with `invalid --since date "…" (expected YYYY-MM-DD)`. The start is midnight UTC, not midnight in your time zone; pick the day before if in doubt.
+</ResponseField>
+
+<ResponseField name="-o, --out <file>" type="string" required>
+  The JSON file to create, relative to the current directory unless absolute. It is created readable and writable by its owner only, because it contains recipients' addresses.
+
+  **Constraints:** the file must not exist yet and its folder must exist. mailroll never overwrites a file. This is checked when the file is created, after every message has been read, and fails with `cannot create <file> (it must not exist yet)`.
+</ResponseField>
+
+## How messages are read
+
+The command asks Microsoft Graph for the messages in the Sent Items folder sent on or after the `--since` moment, oldest first, 100 per page. For each one it keeps the subject, the To and Cc addresses and the sent time. It never reads the message bodies.
+
+- **Throttling.** When Microsoft answers HTTP 429, the command waits and retries the same page up to 5 times. Each wait is the `Retry-After` time Microsoft gives, or 1, 2, 4, 8 and 16 seconds without one, and never more than 60 seconds. A sixth 429 stops the export.
+- **Timeouts.** A request that gets no answer within 120 seconds stops the export with `network error contacting Microsoft Graph`.
+- **Limits.** The export stops with `Sent Items export stopped after 10000 pages` rather than reading without end, and refuses to follow a next-page link that points outside Microsoft Graph.
+- **Access refused.** HTTP 401 or 403 stops the export with `Microsoft Graph refused Sent Items access (HTTP 403) — is Mail.ReadBasic granted?`.
+
+A failure while reading, or Ctrl-C before every page has been read, stops the command before the output file is created. If writing the file fails, for example because the disk is full, the command removes the file it had just created. Either way there is nothing to resume or clean up: run the command again. The tool does not handle Ctrl-C itself: on Linux and macOS the shell reports exit code `130`, and on Windows the code depends on the terminal.
+
+## Examples
+
+Export everything sent from `outlook-1` since January 15, 2026:
+
+```bash Terminal
+npx mailroll-outlook export-sent -c acme/onboarding \
+  --connection outlook-1 \
+  --since 2026-01-15 -o sent-2026-01-15.json
+```
+
+Then find a recipient in the file, for example with `jq`:
+
+```bash Terminal wrap
+jq '.messages[] | select(.to | index("alan@example.org"))' sent-2026-01-15.json
+```
+
+## Output
+
+When the export finishes, a line goes to stderr with the number of messages and the file. Nothing is written to stdout.
+
+```text Output
+exported 2 Sent Items message(s) to sent-2026-01-15.json
+```
+
+The file holds one JSON object:
+
+```json sent-2026-01-15.json
+{
+  "exportedAt": "2026-01-20T10:00:00.000Z",
+  "campaignId": "acme/onboarding",
+  "connectionId": "outlook-1",
+  "mailbox": "sender@example.com",
+  "since": "2026-01-15T00:00:00.000Z",
+  "count": 2,
+  "messages": [
+    {
+      "subject": "Welcome to Acme",
+      "to": ["ada@example.com"],
+      "cc": [],
+      "sentAt": "2026-01-15T09:30:12Z"
+    },
+    {
+      "subject": "Welcome to Acme",
+      "to": ["alan@example.org"],
+      "cc": ["team@example.com"],
+      "sentAt": "2026-01-15T09:30:14Z"
+    }
+  ]
+}
+```
+
+<ResponseField name="exportedAt" type="string" required>
+  When the export ran, as an ISO 8601 UTC timestamp.
+</ResponseField>
+
+<ResponseField name="campaignId" type="string" required>
+  The campaign given with `-c, --campaign`.
+</ResponseField>
+
+<ResponseField name="connectionId" type="string" required>
+  The connection given with `--connection`.
+</ResponseField>
+
+<ResponseField name="mailbox" type="string" required>
+  The connection's `mailbox`, the account that was read.
+</ResponseField>
+
+<ResponseField name="since" type="string" required>
+  The start of the export: midnight UTC of the `--since` day, as an ISO 8601 timestamp.
+</ResponseField>
+
+<ResponseField name="count" type="number" required>
+  The number of entries in `messages`.
+</ResponseField>
+
+<ResponseField name="messages" type="array" required>
+  The exported messages, oldest first.
+
+  - `subject`: the subject, or an empty string when the message has none.
+  - `to`, `cc`: the recipient addresses as Microsoft returns them.
+  - `sentAt`: the sent time as Microsoft returns it.
+</ResponseField>
+
+## Exit codes
+
+- `0`: the file was written.
+- `1`: Microsoft Graph refused access or failed, the network failed, a connection secret is missing, or sign-in failed.
+- `2`: an option is missing or invalid, the campaign or connection does not exist, the connection does not use the Outlook integration, the output file already exists or cannot be created, a sign-in is needed without a terminal, or mailroll is not installed in the project.
+
+## Related
+
+- [Export Sent Items](/guides/export-sent): when and how to use the export
+- [History](/guides/history): what to do with uncertain sends
+- [Connect Outlook](/guides/outlook): app registration, permissions and sign-in

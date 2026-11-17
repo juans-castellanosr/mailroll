@@ -1,0 +1,50 @@
+---
+title: "SDK overview"
+description: "Which mailroll entry point to use, where each one runs, and why sending and secrets stay on a server."
+icon: "layers"
+---
+
+mailroll ships as one npm package with three ways in: the `mailroll` command, the Node.js SDK imported from `mailroll`, and the browser-safe core imported from `mailroll/core`. This page explains where each one runs so you can pick the right one, and where the line between server and browser has to stay.
+
+## Where each surface runs
+
+- **The CLI** runs on a machine with a terminal, or in a script or CI job. It reads your campaign folder, signs in to Microsoft, sends, and records history. See [CLI overview](/cli/overview).
+- **`mailroll`** is the Node.js SDK. From your own code, on a server or a workstation, it can discover campaigns, run a selection in any mode, read list status and read a mailbox's Sent Items, and it exports the building blocks the CLI is made of. It has no interactive menu and does not compile MJML; use the CLI for those. It needs Node.js and access to the campaign folder, the token cache and the connection secrets. See [Node.js SDK](/sdk/nodejs).
+- **`mailroll/core`** is the part with no Node.js or third-party dependencies: address validation, row validation helpers, rendering, run planning and reporting. It runs in a browser or any modern JavaScript runtime. It cannot send, read files or sign in. See [Browser](/sdk/browser).
+- **Your own backend** calls `mailroll` and exposes whatever your application needs, for example an endpoint that returns list status or starts a dry run. mailroll does not provide that layer.
+
+<Note>
+  mailroll has no built-in HTTP API, server or daemon. Every network endpoint around it is code you write, own and secure. The [Node.js SDK](/sdk/nodejs) page has a framework-free example.
+</Note>
+
+## Choose an entry point
+
+| You want to | Use | Runs in |
+| --- | --- | --- |
+| Send from a terminal or a script | `mailroll` CLI | Shell, CI |
+| Send or check status from a program | `import … from 'mailroll'` | Node.js |
+| Validate or preview in a web page | `import … from 'mailroll/core'` | Browser |
+| Let a web app trigger runs | Your backend with `mailroll` | Your server |
+
+`mailroll` re-exports everything in `mailroll/core`, so server code needs only one import path.
+
+## Keep sending on the server
+
+Sending must never run in a browser or any other client you do not control. Three things are involved:
+
+- **The connection secrets**: the Entra tenant and client IDs from [Connection secrets](/reference/environment#connection-secrets). They identify your app registration and are not passwords, because mailroll signs in as a public client with no client secret. There is still no reason to expose them.
+- **The token cache**: saved sign-ins that let the holder act as the mailbox. The token cache and the signed-in session it gives access to are the real secrets. See [Files and folders](/reference/files).
+- **The ability to send**: a client that can start a live run can email every recipient on your lists.
+
+So the browser may validate, render and preview, and your server decides whether anything is sent. A browser that wants a run to happen asks your backend, and the backend authenticates the caller, checks that they may do it, and calls `runSelection` itself.
+
+<Warning>
+  A route that runs `runSelection` in `live` mode sends real email to real people. Put authentication, authorization and an explicit confirmation step in front of it, and never accept the mode, policy or recipient list from the client without checking it on the server.
+</Warning>
+
+## Related
+
+- [Node.js SDK](/sdk/nodejs)
+- [Browser](/sdk/browser)
+- [Errors](/sdk/errors)
+- [Concepts](/concepts)

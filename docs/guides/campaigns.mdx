@@ -1,0 +1,190 @@
+---
+title: "Campaigns"
+description: "Lay out a campaign on disk: its folders, settings, connections, templates and CSV lists, and the naming rules that keep their histories apart."
+icon: "folder-tree"
+---
+
+A campaign is a folder that groups everything needed to send one or more kinds of message from one or more mailboxes. This guide builds one from an empty folder and explains the rules mailroll applies to each part. For a ready-made example, see the [Quickstart](/quickstart); for every field, see [Configuration](/reference/configuration).
+
+## Folder layout
+
+mailroll looks for campaigns two levels below the campaigns folder, which is `campaigns/` in the current directory unless you pass `-C` (`--campaigns`) to the CLI or `campaignsRoot` to the SDK. Each campaign lives at `<group>/<name>/`, and its id is `<group>/<name>`. The group is only a way to organize campaigns, for example by client or team.
+
+<Tree>
+  <Tree.Folder name="campaigns" defaultOpen>
+    <Tree.Folder name="acme" defaultOpen>
+      <Tree.Folder name="onboarding" defaultOpen>
+        <Tree.File name="campaign.config.json" />
+        <Tree.Folder name="connections" defaultOpen>
+          <Tree.File name="outlook-1.json" />
+        </Tree.Folder>
+        <Tree.Folder name="templates" defaultOpen>
+          <Tree.Folder name="welcome" defaultOpen>
+            <Tree.Folder name="code" defaultOpen>
+              <Tree.File name="plugin.ts" />
+            </Tree.Folder>
+            <Tree.Folder name="config" defaultOpen>
+              <Tree.File name="template.config.json" />
+            </Tree.Folder>
+            <Tree.Folder name="data" defaultOpen>
+              <Tree.File name="recipients.csv" />
+            </Tree.Folder>
+            <Tree.Folder name="view" defaultOpen>
+              <Tree.File name="compiled.html" />
+              <Tree.File name="template.mjml" />
+            </Tree.Folder>
+            <Tree.Folder name=".state">
+              <Tree.File name="recipients.json" />
+              <Tree.File name="recipients.jsonl" />
+              <Tree.File name="recipients.json.lock" />
+            </Tree.Folder>
+          </Tree.Folder>
+        </Tree.Folder>
+      </Tree.Folder>
+    </Tree.Folder>
+  </Tree.Folder>
+</Tree>
+
+- `campaign.config.json`: required for every folder at the campaign level.
+- `connections/`: one JSON file per mailbox. Without this folder the campaign has no connections, and no template can be valid.
+- `templates/<id>/`: one folder per template. The folder name is the template id.
+- `view/template.mjml`: optional; only `mailroll build-template` reads it.
+- `.state/`: created by mailroll during the first live run of the template. It holds the send history of each list in `<list>.json`. While a live run is recording sends, `<list>.jsonl` holds the entries not yet merged into it, and while a live run holds the list, `<list>.json.lock` marks it as taken. See [State files](/reference/files#state-files).
+
+mailroll reads every campaign under the campaigns folder whenever it lists, checks or sends anything. An invalid configuration file in any campaign stops that command with an error naming the file, even if you meant to use a different campaign.
+
+## Campaign settings
+
+`campaign.config.json` has a single required field.
+
+```json campaigns/acme/onboarding/campaign.config.json
+{
+  "displayName": "Acme onboarding"
+}
+```
+
+<ResponseField name="displayName" type="string" required>
+  The name shown in the menu and in `mailroll status`.
+
+  **Constraints:** at least one character.
+</ResponseField>
+
+Like every mailroll configuration file, it must be valid JSON and must not contain unknown fields. A missing file fails with `cannot read <path>`, malformed JSON with `invalid JSON in <path>`.
+
+## Connections
+
+A connection is a mailbox the campaign sends from. mailroll reads every `.json` file in `connections/`, in name order. The file name is not used; the `id` field identifies the connection.
+
+```json campaigns/acme/onboarding/connections/outlook-1.json
+{
+  "id": "outlook-1",
+  "kind": "outlook",
+  "mailbox": "sender@example.com"
+}
+```
+
+<ResponseField name="id" type="string" required>
+  The connection's identity. Templates list it in `connectionIds`, the CLI selects it with `--connection`, and its secrets and saved sign-in are named after it.
+
+  **Constraints:** letters, digits, `_` and `-` only. Unique within the campaign, also after the normalization described in [Naming rules](#naming-rules).
+</ResponseField>
+
+<ResponseField name="kind" type="&quot;outlook&quot;" required>
+  The provider. `outlook` is the only value.
+</ResponseField>
+
+<ResponseField name="mailbox" type="string" required>
+  The address messages are sent from. When you sign in, the account must be this address, compared without regard to case.
+
+  **Constraints:** a valid email address; see [Email addresses](/reference/email-addresses).
+</ResponseField>
+
+<ResponseField name="displayName" type="string">
+  A human-readable label. It is accepted but not shown by the CLI.
+
+  **When omitted:** no label.
+</ResponseField>
+
+To connect the mailbox to Microsoft 365, follow [Connect Outlook](/guides/outlook).
+
+## Templates
+
+Each folder under `templates/` is a template: one kind of message with its own body, plugin, lists and history. Create these parts inside it:
+
+- `config/template.config.json`: the template settings. The minimal file names a CC policy, at least one connection and an empty `context`; every field is described in [Template configuration](/reference/configuration#template-configuration).
+- `view/compiled.html`: the HTML body, written by hand or compiled from MJML.
+- `code/plugin.ts`: the plugin. mailroll also accepts `plugin.mts`, `plugin.js` and `plugin.mjs`, and uses the first that exists in that order.
+- `data/`: one or more CSV lists.
+
+This is the smallest valid template configuration. It is a standalone example, not the file the Quickstart creates:
+
+```json Minimal template.config.json
+{
+  "ccPolicy": "forbidden",
+  "connectionIds": ["outlook-1"],
+  "context": {}
+}
+```
+
+- `ccPolicy` is `forbidden`, `optional` or `required`. Use `forbidden` when a CC must never see a recipient's message.
+- `connectionIds` must name connections that exist in the campaign; an unknown id fails with `template "<id>" references unknown connection "<connection>"`.
+- `context` is required, even when empty.
+
+The body and plugin are covered in [Templates](/guides/templates).
+
+## CSV lists
+
+Each CSV file in a template's `data/` folder is a separate list with its own history. mailroll recognizes files ending in `.csv`, in any letter case. The rules for the content:
+
+- **Encoding.** The file must be valid UTF-8; a byte order mark is allowed. Spreadsheet programs often save other encodings: choose "CSV UTF-8". Otherwise the run fails with `it is not valid UTF-8 (save it as "CSV UTF-8")`.
+- **Delimiter.** Comma. A semicolon-separated file fails because it has no `email` column, and the error suggests saving it comma-separated.
+- **Header.** The first line names the columns. Names are trimmed; an empty name, a repeated name or `__proto__` is an error.
+- **`email` column.** Required. It holds each recipient's address.
+- **Cells.** Passed to your validator as strings, exactly as written; mailroll does not trim them. Your validator decides what to trim and what to reject.
+- **Empty lines.** Skipped.
+- **Row length.** Every row must have as many fields as the header. A row with more or fewer fields fails the whole list with `failed to parse CSV at "<path>"`. This happens while the run is prepared, so the run stops before anything is sent.
+- **Duplicates.** When two valid rows have the same address, ignoring case, the first one is kept and the later ones are skipped with `duplicate email in source (kept the first occurrence)`.
+
+The history of a list is keyed by recipient address, compared without regard to case, not by row position. You can add, remove and reorder rows between runs; a recipient already sent to stays sent.
+
+<Warning>
+  Renaming a CSV file gives it a new, empty history, because the history file is named after the CSV. The next live run with the default policy would send to everyone in the renamed list again. Keep the file name once a list has been sent.
+</Warning>
+
+## Choosing a list
+
+When a run does not say which list to use, mailroll picks one per template:
+
+1. A list you name explicitly: `--data <file>` in `mailroll send`, or the CSV you choose in the menu. The name must match a file in `data/` exactly, or the run fails with `data file "<file>" not found in template "<id>"`.
+2. Otherwise `recipients.csv`, if it exists.
+3. Otherwise the only CSV in the folder.
+
+If the folder has several CSV files and none of them is `recipients.csv`, the run fails with `has multiple CSV files; choose one with --data (…)`, listing the files. An empty `data/` folder fails with `has no CSV file in its data/ folder`.
+
+`--data` accepts a comma-separated list. Every template you select is paired with every list you name, and each pair runs as a separate target with its own history.
+
+## Naming rules
+
+Several names end up in environment variable names and file paths. mailroll derives them with one normalization: every run of characters other than ASCII letters and digits becomes `_`, and leading and trailing `_` are removed.
+
+| Name | Normalized | Used in |
+| --- | --- | --- |
+| `acme/onboarding` | `acme_onboarding` | Secrets, saved sign-in folder |
+| `outlook-1` | `outlook_1` | Secrets, saved sign-in file |
+| `recipients.csv` | `recipients` | History files in `.state/` |
+
+Because different names can normalize to the same value, mailroll rejects the collisions that would make two things share data:
+
+- Two campaigns whose ids normalize to the same value, such as `acme/on-boarding` and `acme/on_boarding`, would share secrets and saved sign-ins. Discovery fails with `campaigns "<a>" and "<b>" would share secrets and token caches`.
+- Two connections in a campaign whose ids normalize to the same value fail with `collides with another after normalization; use a distinct id`. Two connections with the same `id` fail with `duplicate connection id`.
+- Two CSV files in a template that map to the same history file, such as `vip-list.csv` and `vip_list.csv`, fail with `map to the same send-state file`.
+- A CSV whose name, without `.csv`, has no letter or digit cannot name a history file and is rejected.
+
+Renaming a campaign folder or a connection id changes its environment variable names and the location of its saved sign-in, so you set the secrets again and sign in again. The history stays in the template folder, so renaming the campaign does not lose it.
+
+## Next steps
+
+- Write the plugin and the HTML body: [Templates](/guides/templates).
+- Connect the mailbox: [Connect Outlook](/guides/outlook).
+- Every field of every file: [Configuration](/reference/configuration).
+- Preview, test and send: [Sending](/guides/sending).

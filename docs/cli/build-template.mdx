@@ -1,0 +1,88 @@
+---
+title: "build-template"
+description: "Reference for mailroll build-template: compile a template's MJML view into the HTML that sends use, and what it checks."
+icon: "layout-template"
+---
+
+`mailroll build-template` compiles a template's `view/template.mjml` into `view/compiled.html`. You need it only if you write your email views in MJML; sends never read the MJML file.
+
+## mailroll build-template
+
+The command takes one argument: the template folder, the one that contains `view/`.
+
+```bash Terminal
+mailroll build-template <template-dir>
+```
+
+The path is relative to the current directory. The command does not use the campaigns folder, so `-C, --campaigns` has no effect on it.
+
+It needs the optional `mjml` package installed next to mailroll. mailroll declares it as an optional peer dependency (`mjml` 5.4.1 or a later 5.x), so it is not installed by default:
+
+<CodeGroup>
+```bash npm
+npm install mjml
+```
+
+```bash pnpm
+pnpm add mjml
+```
+</CodeGroup>
+
+## Options
+
+`build-template` has no options of its own besides `-h, --help`.
+
+<ResponseField name="<template-dir>" type="string" required>
+  The template folder, such as `campaigns/acme/onboarding/templates/welcome`. It must contain `view/template.mjml`.
+
+  **When omitted:** the command stops with a missing-argument error and exit code `2`.
+</ResponseField>
+
+## What it checks
+
+The command reads `view/template.mjml`, compiles it, checks the result, and only then writes `view/compiled.html`. If any check fails, `compiled.html` is left as it was.
+
+1. **The MJML is valid.** Compilation uses MJML's strict validation. Any MJML error stops the command with `MJML reported N error(s) in <path>:` followed by MJML's own messages.
+2. **Every placeholder survives.** Each distinct `{{…}}` in the MJML source must appear unchanged in the compiled HTML.
+3. **Every comment marker survives.** Each distinct HTML comment whose content is uppercase letters, digits and underscores, such as `<!-- STEPS -->`, must also appear in the compiled HTML.
+
+If a placeholder or marker was lost or altered, for example because MJML moved or dropped it, the command stops with `did not survive MJML compilation:` followed by the missing items. Checking this at build time means a broken view fails here, not when a plugin renders the first message. [Templates](/guides/templates) explains placeholders and raw markers.
+
+The compiled file is written without minification and replaces any existing `view/compiled.html` without asking. Sends use `compiled.html`, which a plugin typically loads with `loadCompiledTemplate`; the MJML file is only its source, so rebuild after every change to it.
+
+## Examples
+
+Compile the quickstart template:
+
+```bash Terminal wrap
+npx mailroll build-template campaigns/acme/onboarding/templates/welcome
+```
+
+## Output
+
+On success, one line goes to stderr with the source, the output and the size of the compiled HTML in bytes. Nothing is written to stdout.
+
+```text Output wrap
+compiled campaigns/acme/onboarding/templates/welcome/view/template.mjml → campaigns/acme/onboarding/templates/welcome/view/compiled.html (5321 bytes)
+```
+
+These are the errors you can get, each printed after `error:`:
+
+- `cannot read <dir>/view/template.mjml`: the folder or file does not exist, or cannot be read.
+- `compiling templates needs the "mjml" package: install it next to mailroll (npm install mjml)`: `mjml` is not installed where mailroll can load it.
+- `MJML reported N error(s) in …`: the MJML is invalid.
+- `did not survive MJML compilation: …`: a placeholder or marker was lost.
+
+## Exit codes
+
+- `0`: `view/compiled.html` was written.
+- `1`: any of the errors above, or the compiled file could not be written.
+- `2`: the template folder argument is missing.
+
+The [exit code table](/cli/overview#exit-codes) is authoritative.
+
+## Related
+
+- [Templates](/guides/templates): views, placeholders, raw markers and plugins
+- [Installation](/installation): requirements and the optional `mjml` package
+- [Configuration](/reference/configuration): the template folder and its settings

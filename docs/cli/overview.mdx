@@ -1,0 +1,231 @@
+---
+title: "CLI overview"
+description: "How to start the mailroll CLI, its global options, the guided menu, where output goes and what each exit code means."
+icon: "square-terminal"
+---
+
+The `mailroll` command has two forms: a guided menu for people at a terminal, and four commands for scripts and direct use. This page covers what they share. Each command has its own reference page.
+
+## Invocation forms
+
+The examples in these docs run the binary through `npx`. `pnpm exec mailroll` and a global install work the same way.
+
+```bash Terminal
+npx mailroll                      # guided menu
+npx mailroll <command> [options]  # one command, no menu
+```
+
+- **`mailroll` with no command** opens the [guided menu](#the-guided-menu), but only when the session is interactive.
+- **`mailroll <command>`** runs one of the commands below. Commands never open the menu. In an interactive session, `send` can still ask for a CC, and an integration can start its sign-in (Outlook starts a Microsoft device-code sign-in); see [Interactive and non-interactive sessions](#interactive-and-non-interactive-sessions).
+
+| Command | Purpose |
+| --- | --- |
+| [`send`](/cli/send) | Run a campaign in dry-run, test or live mode |
+| [`status`](/cli/status) | Show the recipient counts of every template and CSV list |
+| [`build-template`](/cli/build-template) | Compile `view/template.mjml` into `view/compiled.html` |
+
+`mailroll --help` lists the commands and global options, and `mailroll <command> --help` shows one command's options. Both print to stdout and exit with `0`.
+
+### Interactive and non-interactive sessions
+
+mailroll treats a session as interactive when both stdin and stderr are terminals. It checks this once at startup, and the result decides three things:
+
+- **The menu.** `mailroll` with no command opens the menu only in an interactive session. Otherwise it prints the help to stderr and exits with `2`.
+- **Questions.** In an interactive session `send` asks for a CC when one is needed and none was given. Without a terminal it stops with exit code `2` and names the option to pass.
+- **Sign-in.** In an interactive session `send` lets each integration sign in; Outlook starts a device-code sign-in. Without a terminal an integration only reuses a saved sign-in, and `send` stops with exit code `2` if there is none. See [Sign in](/guides/outlook#sign-in).
+
+Redirecting stdout, as in `mailroll send … --json > summary.json`, keeps a session interactive because stdin and stderr are still terminals. [Run without a terminal](/guides/automation#run-without-a-terminal) explains how to prepare scheduled and CI runs.
+
+### The `.env` file
+
+Before it parses any option, the CLI loads a `.env` file from the current directory, if one exists. A missing file is ignored. A file that exists but cannot be read stops the CLI with `error: cannot read .env: …` and exit code `2`. The [environment reference](/reference/environment) lists the variables mailroll reads. The SDK never loads `.env`.
+
+## Global options
+
+Global options apply to every command and to the menu. They can go before or after the command name: `mailroll -C ./my-campaigns status` and `mailroll status -C ./my-campaigns` are equivalent.
+
+<ResponseField name="-C, --campaigns <dir>" type="string" default="campaigns">
+  The folder that holds your campaigns, laid out as `<group>/<name>/campaign.config.json`.
+
+  **When omitted:** `campaigns`, relative to the current directory.
+
+  **Constraints:** a folder that does not exist counts as one with no campaigns. `status` reports that there are none, the menu stops with `no campaigns found`, and `send` reports that the campaign was not found. `build-template` ignores this option because it takes a template folder directly.
+</ResponseField>
+
+<ResponseField name="--no-color" type="boolean">
+  Turns off colored output. It sets `NO_COLOR=1` and `FORCE_COLOR=0` for the rest of the process.
+
+  **When omitted:** colors follow Node.js rules. They appear only when the stream is a terminal, and the `NO_COLOR` and `FORCE_COLOR` environment variables are honored.
+</ResponseField>
+
+<ResponseField name="-q, --quiet" type="boolean">
+  Hides informational progress logs, such as one line per rendered or sent message. Warnings and errors still appear, and the run summary and JSON output are unaffected.
+
+  **When omitted:** progress logs are written to stderr.
+</ResponseField>
+
+<ResponseField name="-V, --version" type="boolean">
+  Prints the installed version and exits with `0`.
+</ResponseField>
+
+<ResponseField name="-h, --help" type="boolean">
+  Prints help and exits with `0`. Before a command it lists all commands; after one, it lists that command's options.
+</ResponseField>
+
+The help output also ends with a one-line summary of the [exit codes](#exit-codes).
+
+## The guided menu
+
+Run `npx mailroll` with no command in a terminal to use the menu. It walks you through the same choices as [`mailroll send`](/cli/send), shows the current history of every list before you choose, and sends nothing until you confirm. Prompts are written to stderr.
+
+The menu asks for one thing at a time. When there is only one possible answer, it chooses it, prints a line such as `✔ Campaign: Acme onboarding (acme/onboarding) — the only campaign available`, and moves on. A summary line of your earlier choices is shown above later prompts.
+
+<Steps>
+  <Step title="Campaign">
+    Every campaign under the campaigns folder, shown as display name and id. If none exists, the menu stops with `no campaigns found` and exit code `1`.
+  </Step>
+  <Step title="Templates">
+    A checkbox of the campaign's templates, each with its list counts, or its number of CSV lists when it has several. A template that cannot be used is shown disabled with the reason: `no CSV in data/`, or `cannot be read:` followed by the error, which includes plugin errors. You must select at least one. The step is skipped only when the campaign has exactly one template and it is usable. If no template is usable, the menu stops with `campaign "…" has no usable template (…)`.
+  </Step>
+  <Step title="CSV lists">
+    For each selected template with several CSV files, a checkbox of its lists with their counts, such as `3 in list · sent 0 · failed 0 · pending 3`. A template with one CSV file uses it without asking.
+  </Step>
+  <Step title="Connections">
+    Only connections that every selected template declares are offered. If there are several, you choose one or more, and they share the sending in turn. If the templates have no connection in common, the menu stops with `the selected templates share no connection (…); select them in separate runs`.
+  </Step>
+  <Step title="Send type">
+    **QA** renders previews and sends nothing (dry-run mode). **Stage/UAT** sends real emails, built from real rows, to one test inbox (test mode). **Live** sends to the recipients in each list and records the outcome (live mode). [Compare the modes](/guides/sending#compare-the-modes) explains each mode.
+  </Step>
+  <Step title="Review and confirm">
+    A review panel shows exactly what will happen and lets you adjust it before anything is sent. QA and Live share one panel; Stage has its own. Both are described below.
+  </Step>
+</Steps>
+
+### QA and Live review
+
+The panel lists the connections, the active resend policy and a table with one row per list: `In list`, `Sent`, `Failed`, `Uncertain`, `Will send` and `CC`. `Will send` flags recipients who already have the email or might have it. Below the table, a total states how many emails will be rendered or sent.
+
+The panel offers these actions:
+
+- **Go**, labeled `Render N preview(s) (nothing is sent)` for QA or `Send N email(s) now (real send)` for Live. It is disabled when the total is `0`, and in Live when a list whose template has `ccPolicy` `required` has no CC.
+- **Change CC** appears when at least one list allows CC. It offers the addresses in `CC_RECIPIENT` and the current CC as checkboxes, then a free-text field for more addresses. With several lists you can change one list or all of them. Lists whose template forbids CC show `not allowed` and never receive one. The initial CC of each list is the template's `cc` setting, or none.
+- **Choose recipients** lets you pick exactly who receives one list, with each recipient's history shown next to the address. A pick that differs from what the policy would send becomes a `subset` for that list.
+- **Change policy** appears only when at least one list has history. It offers `pending`, `failed-only` and `force-all`; `failed-only` is disabled when no list has a failed send. Changing the policy discards recipients you chose by hand. [Choose a policy](/guides/resending#choose-a-policy) explains each one.
+- **Cancel** ends the menu. It prints `Canceled — nothing was sent.` and exits with `0`.
+
+QA writes previews to the `previews` folder in the current directory and does not change the history. Live asks one more question before sending. The question states the number of emails, lists, sending mailboxes and the CC, and how many recipients were already sent or are uncertain and would receive the email again. Its default answer is **No**; answering No returns you to the panel.
+
+<Warning>
+  A Live send cannot be undone. Read the confirmation, especially the counts of recipients who already have the email or might have it.
+</Warning>
+
+### Stage review
+
+Stage sends real emails, but every one of them goes to a single test inbox. The people in the lists receive nothing, and no history is recorded. The test inbox comes from `TEST_RECIPIENT`. If that variable is missing, or invalid (the menu says so first), the menu asks for one.
+
+The scope decides which rows are rendered:
+
+- **One random recipient per list**, the default.
+- **One recipient per list, chosen by you**.
+- **Every recipient of each list**. All of the messages land in the test inbox.
+
+Empty lists are skipped. The panel offers these actions:
+
+- **Send N test email(s) to the test inbox**, disabled when every selected list is empty.
+- **Edit test inbox**.
+- **Edit CC**, only when at least one list accepts CC.
+- **Change scope (random · chosen · whole list)**.
+- **Draw other random recipients**, only with the random scope.
+- **Choose the recipients again**, only with the chosen scope.
+- **Cancel (nothing is sent)**.
+
+Stage has no confirmation question.
+
+<Warning>
+  CC recipients are real. In Stage, every address in a list's CC receives a copy of each test email. The panel warns about this when a CC is set; use **Edit CC** to remove it.
+</Warning>
+
+### After you confirm
+
+The menu runs the selection exactly as `mailroll send` would. It signs in to each connection first when the mode needs it, then prints the same [run summary](/cli/send) and exits with the same [exit codes](#exit-codes). If a CSV file changed while you were reviewing it, nothing is sent and the run stops with `… changed after you reviewed it; nothing was sent — review it again`.
+
+## Output streams
+
+mailroll separates results from everything else so that you can redirect results without losing progress or prompts:
+
+- **stdout** carries results only: the run summary, the status table, or JSON when you pass `--json`.
+- **stderr** carries everything else: menu prompts and panels, sign-in instructions, progress logs, notices, lines starting with `warning:` and lines starting with `error:`.
+
+For example, `mailroll send … --json > summary.json` writes clean JSON to the file while sign-in instructions and progress stay visible in the terminal.
+
+### Progress logs
+
+Progress logs are JSON objects, one per line, on stderr. Each has `time`, `level` (`info`, `warn` or `error`), `event` and fields that depend on the event. Here is one line from a dry run:
+
+```json Output wrap
+{"time":"2026-01-15T09:30:00.000Z","level":"info","event":"recipient.rendered","connectionId":"outlook-1","email":"ada@example.com"}
+```
+
+When a live run cannot write a recipient's history, it logs a `recipient.unrecorded` error with `templateId`, `connectionId`, `email`, `attemptId` when there is one, `stage` (`intent`, `outcome` or `release`) and `error`. There is one per recipient, and none when only the final snapshot fails. With several connections, the `error` of a recipient on another connection can be the cause of the write that failed first. See [When the history cannot be written](/guides/history#when-the-history-cannot-be-written).
+
+`--quiet` keeps only `warn` and `error` lines. Event names and fields can change between versions, so scripts should read the run summary or `--json` output instead.
+
+Any log field whose name contains `password`, `secret`, `token`, `authorization`, `credential`, `html` or `content` (in any letter case) is written as `[REDACTED]`. This keeps message bodies and credentials out of logs. Email addresses are not redacted, because they identify who was sent.
+
+### Errors
+
+An error is printed to stderr as one `error:` line. When the error was caused by another one, each cause follows on its own line starting with `caused by:`. Usage errors, which exit with `2`, print only the message.
+
+### Colors and untrusted text
+
+Colors only reinforce meaning: every state, such as `ok`, `needs attention` or `unavailable`, is also written as a word. See `--no-color` above to turn colors off.
+
+Text from your files and from your integrations, such as CSV values, addresses and error details, can contain control characters. Before writing to the terminal, mailroll replaces control and invisible format characters with visible escapes such as `\u{1b}`, so a crafted value cannot move the cursor or change the display. JSON output escapes the same characters as `\uXXXX`, so it remains valid JSON.
+
+## Exit codes
+
+Every command and the menu use the same four exit codes. Scripts should branch on the code, then read the output for details.
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Success, and nothing needs attention |
+| `1` | Something needs attention, or the command failed |
+| `2` | Invalid usage, or input or sign-in needed without a terminal |
+| `130` | Stopped with Ctrl-C |
+
+**`0`** means:
+
+- every list finished and no recipient needs attention, or `status` found no template problem;
+- help or the version was printed;
+- you chose **Cancel** in the menu.
+
+**`1`** means:
+
+- at least one list needs attention: a recipient failed, is uncertain, was not attempted, or is still uncertain from an earlier run, or the provider rejected the CC of a message whose template requires one (validator-rejected rows and rejected optional CC do not count);
+- `status` found a template it cannot read (a rejected CC recorded in the history never changes the exit code of `status`);
+- any other error. This includes configuration errors found while a run is prepared or running, such as a campaign (`campaign "…" not found`) or template that does not exist in `send` or the menu, a connection the template does not declare, a missing environment secret, a live send of a `required`-CC template with no CC (`template "…" requires at least one CC for a live send — …`), a list locked by another run, or a CSV file that changed during the run. The message is followed by its `caused by:` chain.
+
+**`2`** means:
+
+- an unknown option or command, a missing required option or argument, or an invalid choice;
+- an option that does not apply to the others, such as `--to` without `--mode test`, or an invalid address or empty selection given on the command line, in `CC_RECIPIENT` or at the CC question;
+- a question that needs a terminal when there is none, such as a missing CC;
+- an empty answer to the CC question of a live run that includes a `required`-CC template (`a CC is required for a live send — …`);
+- a sign-in that is needed when there is no terminal: no saved sign-in, or one that has expired;
+- `mailroll` with no command and no terminal;
+- a `.env` file that cannot be read.
+
+**`130`** means:
+
+- you pressed Ctrl-C at a prompt (mailroll prints `Canceled — nothing was sent.`);
+- you pressed Ctrl-C during a run. mailroll prints `stopping: sends in flight will finish, nothing else is sent (press Ctrl-C again to quit now)`, lets messages already being sent finish, and sends nothing else. If at least one list ran, the summary is still printed. If the Ctrl-C stopped the run before a list started, or during sign-in, mailroll also prints `stopped before every list was processed; the rest stay pending for the next run`. A Ctrl-C during the last list ends that list early without this line;
+- you pressed Ctrl-C a second time, which quits immediately.
+
+[Uncertain sends](/guides/history#uncertain-sends) explains why an interrupted send can leave a recipient uncertain. The [error classes](/sdk/errors#error-classes) page shows how SDK errors map to these codes.
+
+## Related
+
+- [`mailroll send`](/cli/send): every option of a run
+- [Run without a terminal](/guides/automation#run-without-a-terminal): scripts, CI and scheduled sends
+- [Sending](/guides/sending): the three modes and the recommended flow
+- [Troubleshooting](/troubleshooting): messages and what to do about them

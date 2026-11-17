@@ -1,0 +1,118 @@
+---
+title: "Connect Outlook"
+description: "Install the @mailroll/outlook integration, register a Microsoft Entra app, give mailroll its IDs, and sign in once per mailbox so test and live sends can run."
+icon: "plug"
+---
+
+The Outlook integration, `@mailroll/outlook`, sends through Microsoft Graph as the signed-in user, with delegated permission. It signs in as a public client with the device code flow, so there is no client secret to create or store: you need two IDs from an app registration, and one sign-in per mailbox. Dry runs need only the installed integration; test sends, live sends and `mailroll-outlook export-sent` also need the IDs and the sign-in.
+
+## Install and activate the integration
+
+mailroll does not include Outlook. Install it in the same project as mailroll and declare it in `mailroll.json`, exactly like any other [integration](/guides/integrations):
+
+```bash
+npm install mailroll @mailroll/outlook
+```
+
+```json mailroll.json
+{ "integrations": ["@mailroll/outlook"] }
+```
+
+Connections that use it keep `"kind": "outlook"`. Without the declaration, those connections are refused with `connection "…" uses the integration "outlook", which is not active`, dry runs included, and none of the Outlook code is loaded.
+
+## Register an app in Microsoft Entra ID
+
+One app registration can serve every connection in your tenant. You need permission to register applications in Microsoft Entra ID.
+
+<Steps>
+  <Step title="Create the registration">
+    In the [Microsoft Entra admin center](https://entra.microsoft.com), create a new app registration. No redirect URI is needed for the device code flow.
+  </Step>
+  <Step title="Allow public client flows">
+    Under **Authentication**, set **Allow public client flows** to **Yes**. The device code flow is a public client flow, and sign-in fails without it.
+  </Step>
+  <Step title="Add the Graph permissions">
+    Under **API permissions**, add the Microsoft Graph **delegated** permission **Mail.Send**. If you will use `mailroll-outlook export-sent`, add **Mail.ReadBasic** too. Depending on your tenant's consent settings, an administrator may need to grant consent for these permissions.
+  </Step>
+  <Step title="Copy the IDs">
+    From the app's **Overview**, copy the **Directory (tenant) ID** and the **Application (client) ID**.
+  </Step>
+</Steps>
+
+## Give mailroll the IDs
+
+mailroll reads the two IDs from environment variables named after the campaign and the connection. For the connection `outlook-1` in the campaign `acme/onboarding`:
+
+```bash .env
+ACME_ONBOARDING__OUTLOOK_1__TENANT_ID=<directory-tenant-id>
+ACME_ONBOARDING__OUTLOOK_1__CLIENT_ID=<application-client-id>
+```
+
+- The prefix is the campaign id and the connection id, each normalized (runs of characters other than letters and digits become `_`, leading and trailing `_` are removed), upper-cased and joined with `__`. The full rule and more examples are in [Connection secrets](/reference/environment#connection-secrets).
+- The CLI loads a `.env` file from the current directory if one exists. You can also set the variables in the environment. The SDK does not read `.env`; pass the variables through the process environment or its `env` option.
+- A missing or blank value fails before anything is sent, with `missing environment secret <NAME>`.
+
+These IDs identify your app registration; they are not passwords, and there is no client secret. There is still no reason to expose them. The real secrets are the token cache, which holds the saved sign-in described below, and the signed-in session it gives access to. Sending must never run in a browser.
+
+## Sign in
+
+The first test or live send through a connection asks you to sign in as that connection's mailbox. mailroll signs in to every selected connection, one after another, after it has validated the configuration and the lists and before it locks or sends anything. A failed or canceled sign-in therefore means nothing was sent.
+
+When a connection has no saved sign-in, mailroll prints a message like this on stderr and waits:
+
+```text Output wrap
+Sign in as sender@example.com (connection "outlook-1"). To sign in, use a web browser to open the page https://microsoft.com/devicelogin and enter the code ABCD1234 to authenticate.
+```
+
+The first sentence comes from mailroll; the rest is Microsoft's instruction. Open the page on any device, enter the code and sign in.
+
+- **Use the connection's mailbox.** mailroll compares the account you signed in with against the connection's `mailbox`, ignoring case. If they differ, the run fails with `signed in as <account>, but connection "<id>" sends as <mailbox>; sign in with that mailbox`, and nothing is sent. Run again and sign in with the right account.
+- **Cancel with Ctrl-C.** mailroll stops waiting for the sign-in, sends nothing, and the CLI exits with code 130.
+
+After a successful sign-in, mailroll saves it and later runs reuse it without asking. When Microsoft no longer accepts the saved sign-in, for example because it expired, mailroll asks you to sign in again the same way.
+
+### Where the sign-in is saved
+
+Each connection has its own file, named from the normalized campaign and connection ids:
+
+```text
+.secrets/tokens/acme_onboarding/outlook_1.json
+```
+
+- The path is relative to the current directory. Set `TOKEN_CACHE_PATH` to use another folder instead of `.secrets/tokens`.
+- mailroll creates the folder readable only by you (mode `0700`) and the file readable and writable only by you (mode `0600`), and replaces the file atomically on every update.
+- If the file cannot be read or parsed, mailroll prints a warning, ignores it and asks you to sign in again.
+
+<Warning>
+  The file lets anyone who reads it send email as that mailbox until the sign-in expires or is revoked. Keep `.secrets/` out of version control and backups that others can read. Deleting the file makes mailroll forget the sign-in; the next send through that connection asks you to sign in again.
+</Warning>
+
+## Sign-in without a terminal
+
+mailroll only shows a device code when it can talk to you: when both stdin and stderr are terminals. Otherwise, for example in a scheduled job, it uses the saved sign-in only. If there is none, or it has expired, the run fails before anything is sent:
+
+```text Output wrap
+error: no saved sign-in for sender@example.com (connection "outlook-1"); run mailroll once in a terminal to sign in
+```
+
+With an expired sign-in the message starts with `the saved sign-in has expired`. The CLI exits with code 2. Sign in once from a terminal, in the same directory or with the same `TOKEN_CACHE_PATH`, and run the job again. See [Run without a terminal](/guides/automation#run-without-a-terminal).
+
+If refreshing a saved sign-in fails for another reason, such as a network error, the run fails with `could not refresh the sign-in of connection "<id>"`.
+
+## Several mailboxes
+
+A campaign can have several connections, each a separate JSON file with its own `id` and `mailbox`. Each connection needs its own pair of environment variables, even when they all point to the same app registration, and each signs in and saves its sign-in separately.
+
+When a run selects several connections, mailroll deals the recipients of each list round-robin across them and sends from all of them in parallel. Every selected connection must be listed in the template's `connectionIds`. In the menu, you choose from the connections shared by all the templates you selected.
+
+If Microsoft Graph rejects a connection's sign-in while sending, mailroll stops that connection, reports its remaining recipients as not attempted and lets the other connections continue. See [Send history](/guides/history).
+
+## Exporting Sent Items
+
+`mailroll-outlook export-sent` reads a mailbox's Sent Items to help you check uncertain sends. It requests the **Mail.ReadBasic** permission instead of **Mail.Send** and uses the same saved sign-in file; if the saved sign-in cannot provide that permission, it asks you to sign in again in a terminal. See [Export Sent Items](/guides/export-sent).
+
+## Next steps
+
+- Send to a test inbox, then for real: [Sending](/guides/sending).
+- All environment variables: [Environment](/reference/environment).
+- Sign-in errors and fixes: [Troubleshooting](/troubleshooting).

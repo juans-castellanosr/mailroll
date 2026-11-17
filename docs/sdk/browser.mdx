@@ -1,0 +1,192 @@
+---
+title: "Browser"
+description: "Validate rows, render previews and plan runs in a web page with mailroll/core, and what it cannot do there."
+icon: "globe"
+---
+
+`mailroll/core` is the part of mailroll with no Node.js or third-party dependencies, so it runs in a browser or any modern JavaScript runtime. Use it to give people immediate feedback in a web page: check addresses and rows as they are typed or uploaded, render a message the way mailroll would, and show who a run would send to. Sending stays on your server; see [SDK overview](/sdk/overview).
+
+## What it does in a browser
+
+- **Address validation:** `parseEmailAddress` applies the [email address rules](/reference/email-addresses) and returns the normalized address or the reasons it was rejected. `normalizeEmail` gives the lower-case form mailroll compares with.
+- **Row validation:** `valid`, `invalid` and `requiredField` are the helpers template validators are written with. `collectRecipients` runs a validator over rows exactly as a real run does, including dropping duplicate addresses.
+- **Rendering:** `renderWithMarkers` and `substitute` fill `{{ placeholders }}` in HTML with HTML-escaped values, and `escapeHtml` escapes a single value. A placeholder without a value throws `TemplateRenderError`.
+- **Planning and reporting:** `planRun` decides who a policy would send to, given a list's history, and `report` and `needsAttention` summarize results.
+- **Types and errors:** every domain type and every error class except `RunInterruptedError`, which belongs to `mailroll`.
+
+`mailroll/core` also contains the run engine, `runTemplate`, and the `MemoryStateStore`. They run in a browser, but without a provider that can send they are useful mainly for tests.
+
+## Preview messages
+
+This module validates rows the way a template validator would and renders a message for each accepted one. Rows are plain objects keyed by CSV column name, as your app would produce them from a file upload or a form:
+
+```ts
+import {
+  collectRecipients,
+  type DataSource,
+  type EmailAddress,
+  invalid,
+  parseEmailAddress,
+  type RecipientValidator,
+  type RenderedEmail,
+  renderWithMarkers,
+  requiredField,
+  type SourceRecord,
+  TemplateRenderError,
+  valid,
+} from 'mailroll/core';
+
+interface Member {
+  readonly email: EmailAddress;
+  readonly firstName: string;
+}
+
+const validator: RecipientValidator<Member> = {
+  validate: (row) => {
+    const reasons: string[] = [];
+    const email = parseEmailAddress(row['email'] ?? '');
+
+    if (!email.ok) {
+      reasons.push(...email.reasons);
+    }
+
+    const firstName = requiredField(
+      row['firstName'],
+      'firstName',
+      reasons,
+    );
+
+    return email.ok && reasons.length === 0
+      ? valid({ email: email.value, firstName })
+      : invalid(reasons);
+  },
+};
+
+export type Preview =
+  | {
+      readonly kind: 'rendered';
+      readonly to: EmailAddress;
+      readonly email: RenderedEmail;
+    }
+  | {
+      readonly kind: 'rejected';
+      readonly identifier: string;
+      readonly reasons: readonly string[];
+    };
+
+export async function previewRows(
+  html: string,
+  subject: string,
+  rows: readonly SourceRecord[],
+): Promise<Preview[]> {
+  const source: DataSource = {
+    read: async function* () {
+      yield* rows;
+    },
+  };
+  const { valid: accepted, skips } = await collectRecipients(
+    source,
+    validator,
+  );
+
+  const rendered = accepted.map(({ email, recipient }): Preview => {
+    try {
+      const message = renderWithMarkers({
+        template: html,
+        subject,
+        variables: { firstName: recipient.firstName },
+      });
+
+      return { kind: 'rendered', to: email, email: message };
+    } catch (error) {
+      if (error instanceof TemplateRenderError) {
+        return {
+          kind: 'rejected',
+          identifier: email,
+          reasons: [error.message],
+        };
+      }
+
+      throw error;
+    }
+  });
+  const rejected = skips.map(({ identifier, reasons }): Preview => ({
+    kind: 'rejected',
+    identifier,
+    reasons,
+  }));
+
+  return [...rendered, ...rejected];
+}
+```
+
+- `collectRecipients` returns the accepted recipients and the rejected rows. A rejected row is identified by its `email` cell, or by `row N` when that cell is empty or when your validator accepts the row but returns an invalid email, and duplicates are rejected with `duplicate email in source (kept the first occurrence)`.
+- `renderWithMarkers` substitutes only the HTML. It returns `subject` unchanged, as it does in a real send. See [Templates](/guides/templates).
+- A placeholder in `html` with no matching variable makes that message `rejected` here. In a real run, the same error stops the list.
+
+To match a real send exactly, use the same validator and renderer code as the template's plugin, and the template's `view/compiled.html` as `html`.
+
+<Warning>
+  Rendered HTML contains your recipients' data and whatever markup the template has. Display it in a sandboxed `iframe` (with an empty `sandbox` attribute) rather than inserting it into your page.
+</Warning>
+
+## Show who a run would send to
+
+`planRun` applies a resend policy to a list of accepted addresses and a list's history, and returns who would be sent to and who would be skipped, and why. It does not send anything or need a connection, so the connection id below is only a label:
+
+```ts
+import {
+  type EmailAddress,
+  planRun,
+  report,
+  type ResendPolicy,
+  type TemplateState,
+} from 'mailroll/core';
+
+export function describePlan(
+  recipients: readonly EmailAddress[],
+  state: TemplateState,
+  policy: ResendPolicy,
+) {
+  const plan = planRun({
+    recipients,
+    state,
+    policy,
+    connectionIds: ['preview'],
+  });
+  const skipped = report(plan.skipped);
+
+  return {
+    toSend: plan.assignments.map(
+      (assignment) => assignment.recipient,
+    ),
+    skipped: skipped.skipped,
+    heldUncertain: skipped.heldUncertain,
+    reasons: plan.skipped.map(
+      ({ identifier, reasons }) =>
+        `${identifier}: ${reasons.join('; ')}`,
+    ),
+  };
+}
+```
+
+- `state` is the history of one list, a v2 `TemplateState`. For a list that was never sent, use `emptyState(templateId)`, which returns an empty v2 state. Otherwise your server has to provide it; the browser cannot read the `.state/` folder.
+- A list's snapshot file alone can lag behind its journal after an interrupted run. If your server sends you state, it should load it with `FileStateStore`, which combines both, and pass the result through `upgradeTemplateState`: a history written by mailroll 0.1 is loaded in the v1 format until a live run upgrades it. `upgradeTemplateState` copies it as it is and adds no evidence. See [State files](/reference/files#state-files).
+- `heldUncertain` counts recipients held back because an earlier send is uncertain. They need a human decision; see [Uncertain sends](/guides/history#uncertain-sends).
+
+## Limits
+
+`mailroll/core` cannot:
+
+- **Send email.** It has no Microsoft Graph client and no sign-in. Sending needs connection secrets and a token cache, which must stay on your server.
+- **Read or write files.** It cannot discover campaigns, read CSV files, load `compiled.html` or read history. Pass that data in from your app.
+- **Hold secrets safely.** Anything shipped to a browser is readable by its user. The Entra tenant and client IDs are not passwords, since mailroll signs in as a public client with no client secret, but there is no reason to expose them. Never put the token cache, a token or an API credential that can start a send into browser code; sending must never run in a browser.
+
+For everything that needs the disk or the network, use the [Node.js SDK](/sdk/nodejs) on your server.
+
+## Related
+
+- [SDK overview](/sdk/overview)
+- [Node.js SDK](/sdk/nodejs)
+- [Email addresses](/reference/email-addresses)
+- [Templates](/guides/templates)

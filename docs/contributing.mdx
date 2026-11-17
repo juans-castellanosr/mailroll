@@ -1,0 +1,98 @@
+---
+title: "Contributing"
+description: "Set up the repository, run the checks, understand the architecture and the documentation tests, and ship a release."
+icon: "git-pull-request"
+---
+
+Contributions are welcome. Please follow the repository's `CODE_OF_CONDUCT.md`, and report security issues privately as described in `SECURITY.md`, never in a public issue.
+
+## Setup
+
+You need Node.js 22.18 or newer, npm (the `docs:` scripts run through `npx`) and pnpm. The pnpm version is pinned in the `packageManager` field of `package.json`, and Corepack uses that version only once it is enabled, so run `corepack enable` before installing. Node.js ships Corepack up to version 24; from Node.js 25 on it is no longer bundled, so install it first with `npm install -g corepack`. `corepack enable` creates its shims in the folder of the `corepack` binary, so it needs write access there; `--install-directory <folder>` puts them in another folder on your `PATH`.
+
+`test:package` and `test:integrations` also run against other package managers, and each one you pass must be installed: `yarn` and `bun` are run from your `PATH`, and `yarn-pnp` runs Yarn 4 through the `corepack` command.
+
+```bash
+pnpm install --frozen-lockfile
+pnpm test
+```
+
+| Command | Checks |
+| --- | --- |
+| `pnpm run format:check` | Formatting (Prettier) |
+| `pnpm run lint` | ESLint with the strict type-checked rules, zero warnings |
+| `pnpm run typecheck` | TypeScript |
+| `pnpm test` | Unit, CLI, end-to-end, documentation and repository tests |
+| `pnpm run build` | Builds every package into its `dist/`, dependencies first |
+| `pnpm run check:package` | publint and Are the Types Wrong |
+| `pnpm run test:browser` | Bundles the built `@mailroll/core` and `mailroll/core` for the browser, within a 34.5 KiB budget (35,328 bytes) |
+| `pnpm run test:package <pack-directory> <npm\|pnpm\|yarn\|bun>` | Installs the packed tarballs and uses them like a consumer |
+| `pnpm run test:integrations <pack-directory> <npm\|pnpm\|yarn\|yarn-pnp>` | Installs the packed tarballs with the test integrations in `packages/mailroll/tests/fixtures/integrations`, and checks that the CLI activates, refuses and deactivates them from the project |
+| `pnpm run docs:dev` | Previews the documentation at http://localhost:3000 |
+| `pnpm run docs:check` | Mintlify validation and broken links, including anchors |
+| `pnpm run docs:a11y` | Mintlify accessibility checks: color contrast and image alt text |
+
+The three `docs:` scripts run a pinned version of the Mintlify CLI through `npx`, so the first run downloads it. CI does not run `docs:a11y`; run it when you change colors, images or diagrams.
+
+CI runs formatting, lint, types, build, package metadata, the browser bundle and `docs:check` once on Linux. Tests and the packed-tarball checks (`test:package` and `test:integrations`, with npm and pnpm) run on Linux, macOS and Windows with Node.js 22 and 24. A separate Linux job runs `test:package` with Yarn, the Outlook package check with `yarn-pnp`, and `test:integrations` with Yarn and `yarn-pnp` (Yarn 4 Plug'n'Play through Corepack). `test:package` also accepts `bun`; run it locally when a change could affect installation with it.
+
+## Architecture
+
+The repository is a private pnpm workspace. The root holds the shared tooling, the documentation, CI and the repository tests in `tests/repository/`; each published package lives in `packages/`. Run the scripts above from the root: they cover every package.
+
+The root declares the whole shared toolchain (TypeScript, Vitest, tsdown, ESLint, Prettier, publint, Are the Types Wrong, Changesets and their peers) once, and every package resolves it from the root. A package declares only its runtime dependencies, its peers and the development dependencies that no other package uses.
+
+There are three packages, and dependencies point toward Core only: `mailroll` and `@mailroll/outlook` depend on `@mailroll/core`, and Core depends on nothing. `mailroll` never depends on `@mailroll/outlook`; the Outlook library needs only Core, and only its `mailroll-outlook` tool uses mailroll, as an optional peer, through mailroll's public API. All three carry the same version (a Changesets fixed group), and `mailroll` depends on `@mailroll/core` through `workspace:^`, which is published as a caret range (`^<version>`). An application that also installs `@mailroll/core` directly then shares one compatible copy with `mailroll`, so classes such as `SendError` stay the same instance; an exact pin would install a second copy as soon as the versions differ.
+
+| Package | Contents |
+| --- | --- |
+| `packages/core` (`@mailroll/core`) | Domain types, validation, planning, rendering, the run engine and its ports, and the `sender/0` contract with its validators. No dependencies, no Node.js built-ins and no Node-only globals; it runs in Node.js and browsers. Its modules import each other through relative paths only |
+| `packages/mailroll` (`mailroll`) | The Node.js SDK (`mailroll`), the binary, and `mailroll/core`, which re-exports `@mailroll/core` so both names give the same instances. It includes no integration: the CLI activates the ones a project declares in `mailroll.json` |
+| `packages/outlook` (`@mailroll/outlook`) | The official Outlook integration (Microsoft Graph, MSAL sign-in and token cache, Sent Items) and the `mailroll-outlook export-sent` tool. It is activated exactly like a third-party integration, and its `@mailroll/core` and `mailroll` peers keep one shared copy of each |
+
+Inside `packages/mailroll` the source has two layers, and dependencies only point inward; ESLint enforces this, and it also keeps `mailroll` on the public entry of `@mailroll/core`:
+
+| Layer | Contents |
+| --- | --- |
+| `packages/mailroll/src/integrations` | Adapters behind the ports: CSV, preview providers, MJML, and small file-system helpers |
+| `packages/mailroll/src/platform` | Campaign discovery and validation, file-based history and locks, the campaign runner, status, the menu and the CLI |
+
+During development, `mailroll` resolves `@mailroll/core` to the source of `packages/core`, and `@mailroll/outlook` resolves both `@mailroll/core` and `mailroll` to their sources (TypeScript paths and Vitest aliases), so tests, types and lint need no build first. Every module of a package imports the others of the same package through relative paths, so another package can compile it from source through its public entry alone. A repository test keeps `packages/core/src` and `packages/mailroll/src` free of any provider name or provider package. Its build leaves `@mailroll/core` external, and `test:package` installs the packed tarballs of both packages in a fresh project to prove that `mailroll` ships no copy of Core and shares one instance with it. `pnpm run test:package <pack-directory> <npm|pnpm|yarn|bun>` expects the tarballs from `pnpm -r pack --pack-destination <pack-directory>`.
+
+A run first prepares every list (plugin, CSV and validation, history, secrets, CC, sign-in, locks), then plans who to send to from the history, then sends. In live mode an intent is written before each send and the outcome right after, which is how a crash leaves a recipient *uncertain* instead of silently resent.
+
+## Documentation tests
+
+The documentation lives in `docs/` and is part of `pnpm test`. `packages/mailroll/tests/docs/docs.test.ts` keeps it in step with the code:
+
+- **Navigation matches the files.** Every page listed in `docs/docs.json` must exist, and every `.mdx` file under `docs/` must be listed. Add or remove both together.
+- **The quickstart matches its fixture.** In `quickstart.mdx`, the code blocks whose title starts with `campaigns/acme/onboarding/` must be exactly the files in `packages/mailroll/tests/fixtures/campaigns/acme/onboarding/`: the same set of files, with the same content apart from trailing whitespace. Change the fixture and the page together.
+- **The CLI reference matches the help.** For every command listed by `mailroll --help`, `docs/cli/<command>.mdx` must exist and contain the heading `## mailroll <command>`. Every long option printed by the help of the program or any command must appear in `docs/cli/`, written in code or after a space. No long option that does not exist may appear anywhere in `docs/cli/`, prose included.
+- **TypeScript snippets compile.** Every code block tagged exactly `ts`, on any page, is type-checked as its own module against the public API (`mailroll`, `mailroll/core` and `@mailroll/core`) with strict settings. Use `typescript` or `text` for shapes and fragments that are not meant to compile.
+
+`pnpm run docs:check` and `pnpm run docs:a11y` cover what the test does not: Mintlify syntax, links and anchors, and accessibility.
+
+## Conventions
+
+- The code has no comments; explanations belong in these docs. A test enforces it.
+- No `any`. Errors are explicit and typed; nothing is swallowed.
+- Tests never send real email.
+- Commit messages follow [Conventional Commits](https://www.conventionalcommits.org).
+
+## Releases
+
+Add a changeset to every pull request with user-facing changes:
+
+```bash
+pnpm changeset
+```
+
+On `main`, the release workflow keeps a "Version Packages" pull request up to date. Publishing to npm happens only when a maintainer starts the workflow by hand. On that commit, it first runs the whole CI workflow, with read-only permissions and no secrets: formatting, lint, types, the build, package metadata and the browser bundle; `docs:check`; the tests on Linux, Windows and macOS with Node.js 22 and 24, each installing the packed tarballs with npm and pnpm; and the Yarn and Yarn Plug'n'Play installs. Nothing is packed for publishing unless every CI job passes. The workflow then builds and packs the packages, checks that each tarball it will publish is byte-identical to a second pack of the same build, runs publint and Are the Types Wrong? on each one, checks the browser bundle again, installs the packed tarballs with npm, and only then publishes them from the `npm` environment through npm Trusted Publishing. No npm token is stored anywhere, and the jobs that hold write or publishing permissions install dependencies without running install scripts.
+
+Repository settings the workflow relies on:
+
+- An environment named `npm` with required reviewers and deployments limited to `main`.
+- npm Trusted Publishing configured for each published package (`mailroll`, `@mailroll/core` and `@mailroll/outlook`) with this repository, the `release.yml` workflow and the `npm` environment, with direct publishing (`npm publish`) allowed: the workflow publishes directly, and npm creates new trusted publishers with only staged publishing allowed unless direct publishing is selected. Each package's `repository` field names the same repository, `git+https://github.com/juans-castellanosr/mailroll.git`, with the package's folder as `directory`, because npm checks the provenance of a publish against it.
+- npm accepts a trusted publisher only for a package that already exists on the registry, so the first version of each package is published another way before this workflow can publish it. A new trusted publisher expires unless a publish through it succeeds within two days, so add it only right before the release that will use it.
+- A public repository: npm generates provenance only for a public package published from a public repository.
+- **Allow GitHub Actions to create and approve pull requests** enabled, for the version pull request.

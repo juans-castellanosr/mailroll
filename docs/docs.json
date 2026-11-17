@@ -1,0 +1,88 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "mailroll",
+  "description": "Send personalized email campaigns from CSV lists through a Microsoft 365 mailbox, with previews, test sends and a send history so repeated runs skip people already sent to.",
+  "colors": {
+    "primary": "#3346C4",
+    "light": "#8EA2F5",
+    "dark": "#4D61E3"
+  },
+  "fonts": {
+    "heading": {
+      "family": "Inter",
+      "weight": 600
+    },
+    "body": {
+      "family": "Inter",
+      "weight": 400
+    }
+  },
+  "appearance": {
+    "default": "system"
+  },
+  "icons": {
+    "library": "lucide"
+  },
+  "styling": {
+    "codeblocks": {
+      "theme": {
+        "light": "github-light",
+        "dark": "github-dark"
+      }
+    }
+  },
+  "search": {
+    "prompt": "Search the mailroll docs"
+  },
+  "contextual": {
+    "options": ["copy", "view"]
+  },
+  "navigation": {
+    "groups": [
+      {
+        "group": "Get started",
+        "pages": ["introduction", "quickstart", "installation", "concepts", "migration"]
+      },
+      {
+        "group": "Guides",
+        "pages": [
+          "guides/campaigns",
+          "guides/templates",
+          "guides/outlook",
+          "guides/integrations",
+          "guides/sending",
+          "guides/resending",
+          "guides/history",
+          "guides/automation",
+          "guides/export-sent"
+        ]
+      },
+      {
+        "group": "CLI reference",
+        "pages": ["cli/overview", "cli/send", "cli/status", "cli/build-template"]
+      },
+      {
+        "group": "Outlook tool reference",
+        "pages": ["outlook/export-sent"]
+      },
+      {
+        "group": "Configuration reference",
+        "pages": ["reference/configuration", "reference/environment", "reference/files", "reference/email-addresses"]
+      },
+      {
+        "group": "SDK",
+        "pages": ["sdk/overview", "sdk/nodejs", "sdk/browser", "sdk/errors"]
+      },
+      {
+        "group": "Help",
+        "pages": ["troubleshooting", "contributing"]
+      }
+    ]
+  },
+  "redirects": [
+    { "source": "/configuration", "destination": "/reference/configuration" },
+    { "source": "/cli/commands", "destination": "/cli/overview" },
+    { "source": "/cli/export-sent", "destination": "/outlook/export-sent" }
+  ]
+}

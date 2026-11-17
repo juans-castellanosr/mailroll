@@ -1,0 +1,47 @@
+---
+title: "Introduction"
+description: "What mailroll is, who it is for, and how it keeps a campaign from emailing the wrong people or the same person twice."
+icon: "book-open"
+---
+
+mailroll sends one personalized email to every row of a CSV list, from a Microsoft 365 mailbox, through Microsoft Graph. For each list it records what was sent, meaning which messages Microsoft Graph accepted, so you can stop, fix something and run again without resending by accident.
+
+It is built for developers and technically capable operators who send recurring, data-driven email from their own mailbox: onboarding messages, account details, reminders or announcements. You describe a campaign as a folder of JSON files, CSV lists, an HTML body and a small TypeScript or JavaScript plugin. mailroll does the validation, previews, sending and bookkeeping.
+
+## How you use it
+
+mailroll has three surfaces. They share the same engine, so a campaign behaves the same way whichever one you use.
+
+- **CLI.** Run `mailroll` in a terminal for a guided menu, or `mailroll send`, `mailroll status` and `mailroll build-template` in scripts. The Outlook package adds `mailroll-outlook export-sent`.
+- **Node.js SDK (`mailroll`).** Run campaigns and read their status from your own Node.js code, for example a backend you write. mailroll has no built-in HTTP server.
+- **Browser-safe core (`mailroll/core`).** Validate rows, render messages and plan runs in any JavaScript runtime, including a browser. It cannot send email, read files or hold secrets.
+
+## Safety properties
+
+These are the behaviors mailroll is designed around. Each one is explained in full on the page it links to.
+
+- **Three modes, increasing in risk.** A dry run renders every message and sends nothing; it can write each one to an HTML preview file. Test mode sends real messages, but every one goes to a single test inbox you choose. Live mode sends to the real recipients and, from the CLI, requires `--confirm`. See [Sending](/guides/sending).
+- **Most problems are caught before the first send.** Before any message leaves, mailroll checks the configuration, prepares each template plugin, parses every CSV and validates every row, loads each list's history and resolves the CC addresses; in test and live mode it also checks the secrets and signs in to every mailbox; in live mode it locks every list. A problem found there means nothing was sent. Messages are rendered one at a time, just before each is sent, so a template error such as a missing placeholder value stops the list when the first affected message is built, and a CSV that changed since preparation stops the run before that list starts. A dry run renders every message it plans without sending any, so run one first to surface those errors. See [Checks before the first send](/guides/sending#checks-before-the-first-send).
+- **Invalid rows are never sent.** Your plugin decides which rows are valid. Rejected rows and duplicate addresses are skipped and counted.
+- **A send history per list.** Live sends are recorded per list as they happen. By default a later run sends only to people who have not received the message yet. See [Resending](/guides/resending).
+- **Unknown outcomes are not guessed.** When mailroll cannot know whether a message was delivered (a timeout, a server error, a crash in the middle of a send), it marks the recipient *uncertain* and does not resend unless you choose to. See [Send history](/guides/history).
+- **One live run per list.** A lock file stops two live runs from sending the same list at the same time.
+
+mailroll does not guarantee delivery. A message that Microsoft Graph accepted can still bounce or be filtered later.
+
+## Start here
+
+<Columns cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Create an example campaign and preview every message. Nothing is sent.
+  </Card>
+  <Card title="Core concepts" icon="boxes" href="/concepts">
+    Campaigns, templates, lists, modes, policies and how a run works.
+  </Card>
+  <Card title="Guides" icon="send" href="/guides/campaigns">
+    Build a campaign, write a template, connect Outlook and send safely.
+  </Card>
+  <Card title="Reference" icon="settings" href="/reference/configuration">
+    Every configuration field, environment variable, file and CLI option.
+  </Card>
+</Columns>

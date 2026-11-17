@@ -1,0 +1,515 @@
+---
+title: "Troubleshooting"
+description: "Find the message you saw, learn what causes it, and fix it."
+icon: "life-buoy"
+---
+
+Each entry starts from a message mailroll prints. Errors are printed on stderr after `error:`, followed by `caused by:` lines when there is an underlying error. Search this page for a distinctive part of your message. Parts in angle brackets, such as `<path>`, stand for values from your run. For what each exit code means, see [Exit codes](/cli/overview#exit-codes).
+
+## Command line
+
+### No CC given and no terminal to ask
+
+**Symptom:** `no --cc given and no terminal to ask for one; pass --cc <email[,email...]> (or --cc "" for none)`, exit code `2`.
+
+**Cause:** at least one list allows a CC, its template sets no `cc`, and the run has no terminal to ask you. This happens in dry-run too.
+
+**Fix:** pass `--cc you@example.com`, or `--cc ""` to send without CC.
+
+**Prevent:** set `cc` in `template.config.json` for templates that always use the same CC. See [Automate runs](/guides/automation#run-without-a-terminal).
+
+### Live mode requires `--confirm`
+
+**Symptom:** `live mode requires --confirm to prevent an accidental real send`, exit code `2`.
+
+**Cause:** `--mode live` without `--confirm`.
+
+**Fix:** add `--confirm` once you have checked the run with a dry-run and a test run.
+
+### Test mode requires a test inbox
+
+**Symptom:** `test mode requires --to <address> or TEST_RECIPIENT in the environment`, or `invalid test recipient "<value>": <reasons>`, exit code `2`.
+
+**Cause:** `--mode test` has no test inbox, or the one given is not a valid address.
+
+**Fix:** pass `--to you@example.com`, or set `TEST_RECIPIENT` in the environment or in `.env`.
+
+### An option only applies to another mode or policy
+
+**Symptom:** one of `--recipients only applies to --policy subset`, `--to only applies to --mode test`, `--confirm only applies to --mode live`, `--write-previews only applies to --mode dry-run`, `--previews-dir only applies to --write-previews`, exit code `2`.
+
+**Cause:** mailroll rejects options that would be ignored, so a run never does something other than what you asked.
+
+**Fix:** remove the option, or add the mode or policy it belongs to. See [`mailroll send` options](/cli/send#options).
+
+### Subset without recipients
+
+**Symptom:** `subset policy requires at least one recipient`, or `invalid --recipients address "<value>": <reasons>`, exit code `2`.
+
+**Cause:** `--policy subset` needs at least one valid address in `--recipients`.
+
+**Fix:** pass `--recipients a@example.com,b@example.com`.
+
+### mailroll prints its help and exits with code 2
+
+**Symptom:** running `mailroll` with no command prints the help on stderr and exits with `2`.
+
+**Cause:** without a command, mailroll opens the menu, which needs a terminal on both standard input and standard error.
+
+**Fix:** run it in a terminal, or use a command such as `mailroll send`.
+
+## Campaigns and lists
+
+### Campaign not found
+
+**Symptom:** `campaign "<id>" not found`, exit code `1`, from `send`, the menu or the SDK. `mailroll-outlook export-sent` reports it as `campaign "<id>" not found under <dir>`, exit code `2`, and an unknown `--connection` there as `connection "<connection>" not found in campaign "<id>"`, also exit code `2`.
+
+**Cause:** no `<group>/<name>/campaign.config.json` under the campaigns folder matches the id, or the campaign has no connection with that `id`. The folder is `campaigns` in the current directory unless you pass `-C, --campaigns`.
+
+**Fix:** check the id with `mailroll status`, and run from the folder that contains `campaigns/` or pass `--campaigns <dir>`.
+
+### Template does not declare the connection
+
+**Symptom:** `template "<template>" does not declare connection "<connection>" (it declares: <ids>)`, or `connection "<connection>" does not exist in campaign "<id>"`, exit code `1`.
+
+**Cause:** every connection in `--connection` must exist in the campaign's `connections/` folder and be listed in each selected template's `connectionIds`.
+
+**Fix:** choose connections that every selected template declares, or add the connection to `connectionIds`.
+
+### Several CSV files and none chosen
+
+**Symptom:** `template "<template>" has multiple CSV files; choose one with --data (<files>)`, exit code `1`.
+
+**Cause:** the template's `data/` folder has several CSV files and none is named `recipients.csv`.
+
+**Fix:** pass `--data <file.csv>`, or several files separated by commas.
+
+### No CSV file
+
+**Symptom:** `template "<template>" has no CSV file in its data/ folder`, or `data file "<file>" not found in template "<template>"`, exit code `1`.
+
+**Cause:** the `data/` folder has no `.csv` file, or `--data` names a file that is not in it.
+
+**Fix:** put the list in `templates/<template>/data/`, and pass only the file name to `--data`, not a path.
+
+### CSV is not valid UTF-8
+
+**Symptom:** `unable to read CSV at "<path>": it is not valid UTF-8 (save it as "CSV UTF-8")`, exit code `1`.
+
+**Cause:** the file was saved in another encoding, which is common when exporting from a spreadsheet.
+
+**Fix:** save it again as **CSV UTF-8**.
+
+### CSV has no email column
+
+**Symptom:** `CSV at "<path>" has no "email" column (header: <columns>)`, sometimes followed by `— the file looks semicolon-separated; save it comma-separated`, exit code `1`.
+
+**Cause:** the first row must contain a column named exactly `email`. A spreadsheet set to a locale that uses semicolons writes `email;name` as a single column.
+
+**Fix:** rename the column to `email`, and save the file comma-separated. See [Create a campaign](/guides/campaigns).
+
+### Rows are skipped
+
+**Symptom:** the summary shows `skipped N`, or `mailroll status` shows `N row(s) rejected`.
+
+**Cause:** the template's validator rejected those rows, or they repeat an address that appears earlier in the same CSV. Rows the policy skipped, such as recipients who were already sent, are counted in `skipped` too.
+
+**Fix:** correct the rows in the CSV if they should be sent. See [Skipped rows](/guides/resending).
+
+## Templates
+
+### Unresolved template placeholder
+
+**Symptom:** `unresolved template placeholder "{{firstName}}"`, usually inside `run of "<template>" stopped: ...`, exit code `1`.
+
+**Cause:** the view uses a placeholder that the plugin's renderer passes no value for. During a send, this stops the list at the first affected message; messages before it were already sent.
+
+**Fix:** pass a value for the placeholder in the renderer, or remove it from the view.
+
+**Prevent:** run a dry-run before every test or live run. See [Templates](/guides/templates).
+
+### Compiled template not found
+
+**Symptom:** `compiled template not found at <path> — write it, or compile view/template.mjml with "mailroll build-template <template-dir>"`.
+
+**Cause:** the template has no `view/compiled.html`.
+
+**Fix:** run `mailroll build-template <template-dir>` if you author in MJML, or write `view/compiled.html` yourself.
+
+### Plugin missing or without a default export
+
+**Symptom:** `template at <dir> has no plugin (expected one of: code/plugin.ts, code/plugin.mts, code/plugin.js, code/plugin.mjs)`, or `template plugin at <path> must "export default" definePlugin(...) (an object with a prepare function)`.
+
+**Cause:** the template has no plugin file, or the file does not default-export the result of `definePlugin`.
+
+**Fix:** add `code/plugin.ts` with `export default definePlugin(...)`. See [Templates](/guides/templates).
+
+### MJML package missing
+
+**Symptom:** `compiling templates needs the "mjml" package: install it next to mailroll (npm install mjml)`.
+
+**Cause:** `mailroll build-template` needs the optional `mjml` package, which is not installed.
+
+**Fix:** install `mjml` in the same project as mailroll.
+
+### Placeholders or markers lost during MJML compilation
+
+**Symptom:** `did not survive MJML compilation: <tokens>`.
+
+**Cause:** a `{{placeholder}}` or `<!-- MARKER -->` comment in `view/template.mjml` is missing from MJML's output, so the compiled view would render without it. `compiled.html` was not written.
+
+**Fix:** find where the listed tokens sit in `view/template.mjml`, change the markup so MJML keeps them, and run `build-template` again. See [Templates](/guides/templates).
+
+## CC
+
+### Template does not allow CC
+
+**Symptom:** `template "<template>" does not allow CC (it would expose one recipient's message to a third party)`, exit code `1`.
+
+**Cause:** you passed `--cc` with an address for a template whose `ccPolicy` is `forbidden`.
+
+**Fix:** run that template without `--cc`, or with `--cc ""`.
+
+### Template requires a CC for a live send
+
+**Symptom:** `template "<template>" requires at least one CC for a live send — pass --cc <email[,email,...]> (or set CC_RECIPIENT and choose interactively)`, exit code `1`. At the prompt: `a CC is required for a live send — select at least one saved address or type a new one`, exit code `2`.
+
+**Cause:** the template's `ccPolicy` is `required`, and the live run has no CC (including `--cc ""`).
+
+**Fix:** pass `--cc <email>`, or set `cc` in the template.
+
+### Invalid CC address
+
+**Symptom:** `invalid CC address "<value>": <reasons>`, exit code `2`.
+
+**Cause:** an address in `--cc`, in `CC_RECIPIENT` or typed at the prompt is not valid.
+
+**Fix:** correct the address. See [Email addresses](/reference/email-addresses).
+
+## Sign-in
+
+### Missing environment secret
+
+**Symptom:** `missing environment secret ACME_ONBOARDING__OUTLOOK_1__TENANT_ID` (or `__CLIENT_ID`), exit code `1`.
+
+**Cause:** test and live runs, and `mailroll-outlook export-sent`, need the connection's Entra IDs, and the variable is missing or empty.
+
+**Fix:** set both variables, in the environment or in `.env` in the folder you run mailroll from. See [Connection secrets](/reference/environment#connection-secrets) for how the names are built.
+
+### No saved sign-in, or the saved sign-in has expired
+
+**Symptom:** `no saved sign-in for <mailbox> (connection "<id>"); run mailroll once in a terminal to sign in`, or the same message starting with `the saved sign-in has expired`, exit code `2`.
+
+**Cause:** a run without a terminal found no usable sign-in for the connection: none was saved, it was saved from another folder or `TOKEN_CACHE_PATH`, or Microsoft now requires signing in again.
+
+**Fix:** run the same command once in a terminal, from the same folder, and complete the sign-in.
+
+**Prevent:** see [Automate runs](/guides/automation#run-without-a-terminal).
+
+### Signed in with the wrong account
+
+**Symptom:** `signed in as <account>, but connection "<id>" sends as <mailbox>; sign in with that mailbox`, exit code `1`.
+
+**Cause:** you completed the device-code sign-in with an account other than the connection's `mailbox`. mailroll refuses it, so messages always come from the configured address.
+
+**Fix:** run again and sign in as the mailbox named in the message. A private browser window avoids reusing the other account.
+
+### Could not refresh the sign-in
+
+**Symptom:** `could not refresh the sign-in of connection "<id>"`, followed by `caused by:` with Microsoft's error, exit code `1`.
+
+**Cause:** Microsoft rejected the saved sign-in for a reason other than an expiry, for example a network failure or a change in the app registration.
+
+**Fix:** read the `caused by:` line. If the cause is not temporary, check the app registration; see [Connect Outlook](/guides/outlook).
+
+### Saved sign-in cannot be read
+
+**Symptom:** `Token cache <path> is unreadable (<reason>); ignoring it — you will be asked to sign in again.` or `The saved sign-in of connection "<id>" cannot be read (<reason>); sign in again.`
+
+**Cause:** the token cache file is damaged or unreadable.
+
+**Fix:** sign in again from a terminal. mailroll writes a new cache.
+
+## Sending
+
+### Recipients are marked UNCERTAIN
+
+**Symptom:** the summary lists `UNCERTAIN: <address> — <reason> — check before resending`, or `still UNCERTAIN: <address> — still uncertain from an earlier run`, and the exit code is `1`.
+
+**Cause:** mailroll cannot know whether Microsoft accepted the message; [Uncertain sends](/guides/history#uncertain-sends) lists every cause. mailroll never resends these by itself.
+
+**Fix:** check the mailbox's Sent Items, then resend only the missing ones with `--policy subset --recipients <emails>`. See [Resolve an uncertain send](/guides/history#resolve-an-uncertain-send).
+
+### Connection stopped after 3 uncertain sends in a row
+
+**Symptom:** `connection "<id>" stopped after 3 uncertain sends in a row (provider outage?); not attempted`.
+
+**Cause:** three sends on the same connection in a row ended uncertain, which usually means Microsoft Graph is having trouble. mailroll stopped using that connection for the rest of the list.
+
+**Fix:** wait until Microsoft Graph is healthy, resolve the uncertain recipients, then run `pending` again. Recipients reported as not attempted are still pending.
+
+### Connection quarantined
+
+**Symptom:** `connection "<id>" quarantined (authentication failed); not attempted`.
+
+**Cause:** during the run, mailroll could not get a token for the connection, or Microsoft Graph answered 401 or 403. The current send was not recorded as sent, and the connection's remaining recipients in that list were not attempted.
+
+**Fix:** look for `recipient.auth_failed` in the logs on stderr for the reason. Check that the app has the delegated **Mail.Send** permission and that the mailbox can send, sign in again, then run `pending`.
+
+### Still throttled after waiting
+
+**Symptom:** a failed recipient with `[throttled] ... still throttled after waiting <N> s (limit <M> s)`.
+
+**Cause:** Microsoft Graph kept throttling the mailbox until the next wait would exceed `maxThrottleWaitMs`.
+
+**Fix:** run `pending` again later; failed recipients are sent again. To spread sends out, raise `delayBetweenSendsMs`. See [Retries and throttling](/guides/sending#retries-and-throttling).
+
+### Microsoft Graph sendMail failed
+
+**Symptom:** a failed recipient with `[permanent] Microsoft Graph sendMail failed (HTTP <status>): <details>`, or `[transient] could not reach Microsoft Graph (<code>)`.
+
+**Cause:** `permanent` means Graph rejected the message, for example an HTTP 400 for an address or content it refuses. `transient` means mailroll could not reach Graph at all and the retries ran out, so the message was not sent.
+
+**Fix:** for `permanent`, read the details Graph returned, fix the data or template, and run `pending` or `failed-only`. For `transient`, check the network and run `pending` again.
+
+### Nobody was sent
+
+**Symptom:** the summary shows `sent 0` with every recipient counted in `skipped`.
+
+**Cause:** the policy skipped everyone: with `pending`, every row was already sent; with `failed-only`, no row had failed.
+
+**Fix:** nothing, if that is what you expected. Otherwise run `mailroll status` to see the list's history, and see [Run again safely](/guides/resending#choose-a-policy).
+
+## History and locks
+
+### Send state is in use by another run
+
+**Symptom:** `the send state of "<template>" · <file.csv> is in use by another run (process <pid> on <host>, since <time>). Wait for it to finish; if no run and no lock recovery is active on this list (<path>.recover does not exist), delete <path>`, exit code `1`.
+
+**Cause:** another live run is using the list, a run on another machine left its lock behind, or the process id of a dead run was reused by another process.
+
+**Fix:** wait for the other run to finish. mailroll removes by itself the lock of a finished process only when it can prove that process has ended: same host name, same boot and same container; otherwise see [Lock from another process space](#lock-from-another-process-space). If you are sure no run and no lock recovery is using the list on any machine, and `<path>.recover` does not exist, delete the lock file named in the message. See [Locks](/guides/history#locks).
+
+### Lock from another process space
+
+**Symptom:** `the send state of "<template>" · <file.csv> is in use by another run (process <pid> on <host>, since <time>), and mailroll cannot tell whether that process is still running: <reason>. Wait for it to finish. Only once you are sure that it has ended, on every machine and container that shares this folder under the host name <host>, and that no lock recovery is active on this list (<path>.recover does not exist), delete <path>`, exit code `1`. For a recovery file: `… cannot be recovered: <path>.recover shows that process <pid> on <host>, since <time>, is recovering <path> or stopped while doing so, and mailroll cannot tell whether that process is still running: <reason>. …`
+
+**Cause:** the lock carries your host name, but mailroll cannot prove that its process has ended. The `<reason>` says which case applies:
+
+- written during another boot: this machine restarted, or another machine has the same host name;
+- written in another PID namespace: another container, a container restarted since, or the host outside the containers;
+- no process space recorded: the lock was written by mailroll 0.1, or by a run that could not read its own;
+- this run cannot read `/proc/sys/kernel/random/boot_id` or `/proc/self/ns/pid`.
+
+**Fix:** check every container and machine that mounts the folder for a mailroll run on that list. Once none is running and no recovery is active, delete the files the message names, the `.recover` file first, and run again. To avoid this, give each container or machine that shares a state folder its own host name. See [Lock](/reference/files#lock).
+
+### Send state is being recovered by another run
+
+**Symptom:** `the send state of "<template>" · <file.csv> is being recovered by another run (process <pid> on <host>, since <time>); try again when it finishes. If that process is not a mailroll run (its process id may have been reused), make sure that no mailroll run and no lock recovery is active on this list, then delete <path>.recover`, exit code `1`.
+
+**Cause:** another run on this machine is replacing the lock of a process that is no longer running. A recovery takes a moment.
+
+**Fix:** run again. If the message stays, and the named process is not a mailroll run, make sure no mailroll run and no lock recovery is active on the list, then delete the `.recover` file named in the message.
+
+### Send state cannot be recovered
+
+**Symptom:** `the send state of "<template>" · <file.csv> cannot be recovered: an earlier recovery of <path> did not finish and left <path>.recover (process <pid> on <host>, since <time>). Make sure that no mailroll run and no lock recovery is active on this list, on every machine that shares this folder; then delete <path>.recover, and delete <path> too if the process that holds it is not running`, exit code `1`.
+
+**Cause:** a run ended in the middle of a lock recovery, or the recovery is running on another machine that shares the folder. mailroll never removes a `.recover` file it did not create, because it cannot tell these two cases apart.
+
+**Fix:** check every machine that shares the folder. When no mailroll run is active on the list, delete the `.recover` file, and then the lock file if its process is not running. Leftover `.stale-<id>` and `.tmp` files next to them can be deleted too. See [Stale locks](/guides/history#stale-locks).
+
+### Could not remove the recovery marker
+
+**Symptom:** `the send state of "<template>" · <file.csv>: could not remove <path>.recover, and <state of the lock>. Make sure that no mailroll run and no lock recovery is active on this list, on every machine that shares this folder; then delete <path>.recover`, exit code `1`.
+
+**Cause:** mailroll recovered or tried to recover a stale lock, and then the file system refused to delete the `.recover` file. The message says whether the lock was recovered and released again.
+
+**Fix:** fix the file-system problem, such as permissions, then follow the message: delete the `.recover` file when no run and no recovery is active on any machine.
+
+### Lock kept changing during recovery
+
+**Symptom:** `the send state of "<template>" · <file.csv> could not be taken: the lock left by process <pid> on <host>, since <time>, which is no longer running, kept changing while mailroll tried to recover it; try again`, exit code `1`.
+
+**Cause:** the lock belongs to a process that is no longer running, but it changed under mailroll on every attempt to recover it, usually because other runs on the same list were starting and recovering it at the same time.
+
+**Fix:** run again once the other runs have finished. Nothing was deleted.
+
+### Lock replaced while it was being recovered
+
+**Symptom:** `the lock <path> was replaced while it was being recovered, which only happens if someone deleted it by hand during the recovery; nothing was deleted: the replacement is kept as <path>.stale-<id>, and the run whose lock it is will stop at its next check. Make sure that no mailroll run and no lock recovery is active on this list, on every machine that shares this folder, before running again`, exit code `1`. If the moved file has disappeared, the part after `nothing was deleted: ` reads `the file moved to <path>.stale-<id> has disappeared` instead.
+
+**Cause:** while mailroll was moving a lock aside, the lock file was deleted or replaced by something else, typically by hand, and another run had created its own lock. mailroll never puts a moved file back, because a third run may have taken and used the list in the meantime: the message names the copy it kept as `<path>.stale-<id>`, or says that the moved file disappeared. The run whose lock was moved stops at its next check.
+
+**Fix:** find out who or what touched the `.state/` folder, and check every machine that shares it. When no run and no recovery is active on the list, delete any `<path>.stale-<id>` the message names, then run again. See [Stale locks](/guides/history#stale-locks).
+
+### Lock replaced while it was being released
+
+**Symptom:** `<path> was replaced while this run was releasing its own lock, which only happens if someone deleted it by hand; nothing was deleted: the replacement is kept as <path>.stale-<id>, and the run whose lock it is will stop at its next check. Make sure that no mailroll run and no lock recovery is active on this list, on every machine that shares this folder, before running again`, logged as `state.lock_release_failed`. If the moved file has disappeared, the part after `nothing was deleted: ` reads `the file moved to <path>.stale-<id> has disappeared` instead.
+
+**Cause:** the lock was deleted by hand during the run, and another run created its own. mailroll moved that other run's lock aside while releasing and saw that it was not its own. It never puts a moved file back, because a third run may have taken and used the list in the meantime, so it kept the copy under the name the message gives. The run whose lock was moved stops at its next check.
+
+**Fix:** make sure no mailroll run and no lock recovery is active on this list on any machine, then delete the `.stale-<id>` file and run again.
+
+### Moved copy of a released lock left behind
+
+**Symptom:** `<path> was released, but the copy it was moved to, <copy>, could not be removed; mailroll never reads it, and it is safe to delete`.
+
+**Fix:** delete `<copy>`.
+
+### CSV changed during the run
+
+**Symptom:** `<file.csv> of "<template>" changed after the run was prepared; nothing more was sent — run again`, or `changed after you reviewed it; nothing was sent — review it again`, exit code `1`.
+
+**Cause:** the CSV was modified between preparation, or your review in the menu, and the moment its list was about to send.
+
+**Fix:** finish editing the file, then run again. Lists that finished earlier kept their history.
+
+### Corrupt state journal or state file
+
+**Symptom:** `corrupt state journal at <path> (line <N>)`, `corrupt state file at <path>`, or `invalid state file at <path>: <details>`, exit code `1`.
+
+**Cause:** a history file of the list was damaged or edited by hand.
+
+**Fix:** keep a copy, then fix or remove the reported line or field. Do not delete the history: the next `pending` run would send to everyone again. See [Send history](/guides/history).
+
+### Could not record send state
+
+**Symptom:** one of these, followed by `: <reason>`, exit code `1`:
+
+- `could not record send state before sending to <address>; this run did not call the provider for it, though the history may read this attempt as uncertain`
+- `could not record send state after sending to <address>; the history will read this attempt as uncertain, so check whether it was delivered before resending`
+- `could not record send state after the send to <address> stopped without the provider accepting it (it may not have been called); the history will read this attempt as uncertain`
+- `could not record send state snapshot; no recorded outcome is lost, and the next live run replays the journal`
+
+The log has a `recipient.unrecorded` error event for each recipient whose write failed, with its `stage`: `intent`, `outcome` or `release`. A failed snapshot has no such event.
+
+**Cause:** a history line or the snapshot could not be written. The list stopped. The `<reason>` names what refused the write: the disk, for example because it is full or the `.state/` folder is not writable, the list's lock, when it reads `ConfigError: the send state of "<template>" · <file.csv> can only be written by the store that holds its lock and loaded it after taking it (…); nothing was written`, or another refusal of the history files, when it reads `ConfigError: cannot upgrade …` or `ConfigError: the state journal at <path> disappeared during the run; …`. It can also read `ConfigError: refusing to write a send history mailroll could not read back: …` or `ConfigError: refusing to write a journal line mailroll could not read back: …`. mailroll checks every snapshot and journal line against its own history format before writing it, and refuses to write one it would reject on the next load; nothing is written. This is an internal safeguard that a correct run never triggers, so please [report it](https://github.com/juans-castellanosr/mailroll/issues) with the message.
+
+**Fix:** remove the cause first. For a disk problem, fix the disk or permissions. For a lock problem, see [The send state can only be written by the store that holds its lock](#the-send-state-can-only-be-written-by-the-store-that-holds-its-lock): a run that took the list over does not send again the recipients this run left uncertain; see [Locks](/guides/history#locks) for the remaining limits. For the others, see [The history cannot be upgraded](#the-history-cannot-be-upgraded), [A backup already exists](#a-backup-already-exists), [The journal disappeared during the run](#the-journal-disappeared-during-the-run) and [The journal appeared before the run wrote to it](#the-journal-appeared-before-the-run-wrote-to-it). Then act on the message:
+
+- **Before sending:** this run did not call the provider for that recipient. If the next run shows it as uncertain, you can confirm with your provider that nothing arrived.
+- **After sending:** the provider was called. Check the mailbox's Sent Items, or your provider, before resending.
+- **After a stopped send:** the provider did not accept the message, and may not have been called. The next run shows it as uncertain; check before resending.
+- **Snapshot:** nothing needs to be checked; the next live run replays the journal.
+
+With several connections, the message and the `recipient.unrecorded` event of a recipient on another connection can carry the cause of the write that failed first, because its own write was refused right after. See [When the history cannot be written](/guides/history#when-the-history-cannot-be-written).
+
+### History written by a newer mailroll
+
+**Symptom:** `cannot read the state file at <path>: it was written by a newer mailroll; upgrade mailroll to use this history`, or the same for `the state journal`, exit code `1`.
+
+**Cause:** a newer version of mailroll wrote this history. mailroll refuses it rather than guess, and changes nothing.
+
+**Fix:** use the newer mailroll for this list.
+
+### History mixes formats
+
+**Symptom:** `the send history at <path> mixes a v2 journal with a v1 snapshot` (or `with no snapshot`); `nothing was changed, restore the matching files before running again`, exit code `1`.
+
+**Cause:** the snapshot was replaced or removed by hand after the list was upgraded to v2, for example by restoring an old copy while a v2 journal was still there.
+
+**Fix:** put back the snapshot that belongs with the journal. See [Restoring the v1 files](/reference/files#restoring-the-v1-files) for the only safe way back to the v1 files.
+
+### The history cannot be upgraded
+
+**Symptom:** `cannot upgrade the state file at <path>: it holds data that is not part of the v1 history format, so upgrading would drop it; nothing was changed, check the file before running again`, or `cannot upgrade the state journal at <path>: line <N> is not a v1 history entry mailroll can keep; nothing was changed, check the file before running again`, exit code `1`. A direct call to `append` or `compact` on a `FileStateStore` throws it as a `ConfigError`. During a live run, from the CLI, `runSelection` or `runTemplate`, it appears instead after `could not record send state …: ConfigError: `; see [Could not record send state](#could-not-record-send-state). The upgrade happens at the list's first write, so the stage is `before sending to <address>`, or `snapshot` when the list has nothing left to send. Nothing was sent from that list.
+
+**Cause:** a v1 history file has a field mailroll 0.1 never wrote, or its journal ends with a complete line that cannot be read. mailroll can still read the list, so `status` and dry runs work, but a live run will not upgrade it, because the upgrade would lose that data.
+
+**Fix:** keep a copy, then remove or fix the reported field or line by hand.
+
+### A backup already exists
+
+**Symptom:** `cannot upgrade the send history: <path>.v1-backup already exists with other content, so the history changed after that backup was taken (for example by an older mailroll); …`, exit code `1`. A direct call to `append` or `compact` on a `FileStateStore` throws it as a `ConfigError`. During a live run, from the CLI, `runSelection` or `runTemplate`, it appears instead after `could not record send state …: ConfigError: `; see [Could not record send state](#could-not-record-send-state). The upgrade happens at the list's first write, so the stage is `before sending to <address>`, or `snapshot` when the list has nothing left to send. Nothing was sent from that list.
+
+**Cause:** a backup from an earlier upgrade attempt exists, and the v1 history changed since then, for example because mailroll 0.1 ran on the list in between. mailroll never overwrites a backup.
+
+**Fix:** compare the backup with the current files, keep the one you trust somewhere safe, remove the backup named in the message, and run again.
+
+### The send state can only be written by the store that holds its lock
+
+**Symptom:** `the send state of "<template>" · <file.csv> can only be written by the store that holds its lock and loaded it after taking it (<reason>); nothing was written`. A direct call to `append` or `compact` on a `FileStateStore` throws it as a `ConfigError`. During a run, from the CLI, `runSelection` or `runTemplate`, it appears instead after `could not record send state …: ConfigError: `, because the run reports it as a `StatePersistenceError` that names the recipient and the write that failed; see [Could not record send state](#could-not-record-send-state). `<reason>` is one of:
+
+- `this store does not hold its lock`
+- `it was not loaded after the lock was taken`
+- `its lock file no longer belongs to this run`
+- `its lock file could not be read to confirm this run still owns it`
+
+A run that loses its lock while it writes can stop with one of these related messages instead: `the intent to send to <address> was written to the send state of "<template>" · <file.csv>, but right after it this run could no longer confirm that it holds its lock (<reason>); nothing was sent to <address>, and the history now reads it as uncertain`; `the send state of "<template>" · <file.csv> can only be written by the store that holds its lock, and while preparing the history files this run could no longer confirm that it holds it (<reason>); it stopped before changing them further`; or `the snapshot of the send state of "<template>" · <file.csv> was written, but right after it this run could no longer confirm that it holds its lock (<reason>); the journal was kept, so no record written by another run was removed`. In each case the run did not send the message it was about to send, and did not replace, shorten or delete a history file after it lost the lock.
+
+**Cause:** with the first two reasons, a program wrote through `FileStateStore` without calling `lock()` on the same instance first, or wrote before loading the list again after taking the lock. The CLI and `runSelection` always do both. With the last two, the lock file was deleted, replaced by another run, or became unreadable while the run was writing. That only happens if someone or something touched the `.state/` folder during the run.
+
+**Fix:** in your own code, call `lock()` on the same `FileStateStore`, run the list with `runTemplate`, which loads it, and call `release()` in a `finally` block. See [History stores](/sdk/nodejs#history-stores). If the lock was lost, find out what touched it, and check the run's summary and your provider before running again: the recipient named in the message, and any send the run had in flight, are uncertain, and the history says `crash, kill or power loss` even when the provider was not called. Check with your provider whether they arrived, then resend the ones that did not with `subset`. A duplicate is still possible if the run was suspended, or if the folder is shared through SMB, a WSL `/mnt/c` path, a sync service, or with an older mailroll; see [Locks](/guides/history#locks).
+
+### The send state is already used by another live run of this state store
+
+**Symptom:** `the send state of "<template>" · <file.csv> is already used by another live run of this state store; nothing was sent`.
+
+**Cause:** a program started two live `runTemplate` calls for the same list on one `StateStore` instance at the same time. This applies to every store, including `MemoryStateStore`.
+
+**Fix:** wait for the first run to finish before starting the next one on the same list.
+
+### The journal disappeared during the run
+
+**Symptom:** `the state journal at <path> disappeared during the run; nothing was written, and the run stops so no send goes unrecorded`, exit code `1`. A direct call to `append` or `compact` on a `FileStateStore` throws it as a `ConfigError`. During a live run, from the CLI, `runSelection` or `runTemplate`, it appears instead after `could not record send state …: ConfigError: `; see [Could not record send state](#could-not-record-send-state). The stage is the write that found the journal missing: `before sending to <address>`, `after sending to <address>` or `after the send to <address> stopped …`.
+
+**Cause:** something outside mailroll removed the journal while the list was running.
+
+**Fix:** find out what removed it. The journal held the sends of this run since the last snapshot, and they are now missing from the history, so the next `pending` run would send to those recipients again. Check the run's summary and your provider before running again.
+
+### The journal appeared before the run wrote to it
+
+**Symptom:** `the state journal at <path> appeared before this run wrote to it, so something else created it: another program while this run held the list's lock, or another run that took the lock after this run lost it; nothing was written`, exit code `1`. A direct call to `append` on a `FileStateStore` throws it as a `ConfigError`. During a live run, from the CLI, `runSelection` or `runTemplate`, it appears instead after `could not record send state before sending to <address>; …: ConfigError: `; see [Could not record send state](#could-not-record-send-state).
+
+**Cause:** the list had no v2 journal when the run was about to write its first line, and another one was created before mailroll could create its own. Only something outside mailroll, a program writing to the history without the list's lock, or another run that took the lock after this run could no longer confirm it, can do that.
+
+**Fix:** find out what created the journal, and keep a copy of it before changing anything: it may hold sends that are not in the snapshot. This run wrote nothing and sent nothing from that list.
+
+### Hard links are not supported
+
+**Symptom:** every live run stops before sending anything with `could not create <path>.lock; nothing was left behind`, exit code `1`. The error's `cause` is an error from `link`, such as `EPERM` or `ENOTSUP`. Dry runs, test sends and `status` work.
+
+**Cause:** mailroll creates locks, backups and new journals with hard links so it never overwrites a file, and the file system of the campaigns folder has no hard links. FAT and exFAT drives, and some network or synchronized folders, are like this. There is no fallback.
+
+**Fix:** keep the campaigns folder on a file system with hard links, such as the system drive. See [Platforms and limits](/reference/files#platforms-and-limits).
+
+### Attempt id rejected
+
+**Symptom:** `newAttemptId must return a new, non-empty text id for every send`, or `attempt id "<id>" is already recorded for <address>; newAttemptId must not repeat ids`, exit code `1`.
+
+**Cause:** the `newAttemptId` dependency passed to `runTemplate` returned an empty value, repeated an id within the list, or returned an id already recorded for that recipient. The run stops before writing the intent or sending.
+
+**Fix:** return a new unique id every time, for example from `crypto.randomUUID()`. Without the option, mailroll uses `crypto.randomUUID()` itself.
+
+## Exporting Sent Items
+
+### Output file cannot be created
+
+**Symptom:** `cannot create <file> (it must not exist yet)`, exit code `2`.
+
+**Cause:** `mailroll-outlook export-sent` never overwrites a file, so the file already exists. The same message appears when the file cannot be created for another reason, such as a folder in the `--out` path that does not exist or is not writable.
+
+**Fix:** choose a new name for `--out` or move the old file away, and make sure the folder it goes in exists and is writable.
+
+### Sent Items access refused
+
+**Symptom:** `Microsoft Graph refused Sent Items access (HTTP 403) — is Mail.ReadBasic granted?`, exit code `1`.
+
+**Cause:** the app registration lacks the delegated **Mail.ReadBasic** permission, or it was not consented.
+
+**Fix:** add the permission; see [Register an app in Microsoft Entra ID](/guides/outlook#register-an-app-in-microsoft-entra-id).
+
+### Invalid since date
+
+**Symptom:** `invalid --since date "<value>" (expected YYYY-MM-DD)`, exit code `2`.
+
+**Cause:** `--since` must be a calendar date such as `2026-01-15`.
+
+**Fix:** pass the date in that form. It is read as midnight UTC.
+
+## Related
+
+- [Exit codes](/cli/overview#exit-codes).
+- [Send history](/guides/history).
+- [Error classes](/sdk/errors#error-classes) for SDK users.

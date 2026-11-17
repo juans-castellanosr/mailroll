@@ -1,0 +1,104 @@
+---
+title: "Verify sends with export-sent"
+description: "Export a mailbox's Sent Items to a JSON file to check which messages actually went out, for example after an uncertain send."
+icon: "file-output"
+---
+
+`mailroll-outlook export-sent` reads the Sent Items folder of one connection's mailbox and writes the subject, recipients and send time of each message to a new JSON file. Use it to check whether an uncertain send was delivered before you resend it, or to keep a record of a campaign.
+
+## How it helps with uncertain sends
+
+When a send is uncertain, mailroll does not know whether Microsoft accepted the message; see [Uncertain sends](/guides/history#uncertain-sends). The sending mailbox's Sent Items is the place to check. If the uncertain recipient appears in a message sent after the send started, it went out and you should not resend it. If not, resend it with `--policy subset`.
+
+Sent Items only holds a copy of a mailroll message when the template's `template.config.json` sets `"saveToSentItems": true`. The default is `false`, which tells Microsoft not to keep a copy, so the export cannot show those messages. Set `saveToSentItems` before a send if you may need to verify it later; see [Template configuration](/reference/configuration#template-configuration).
+
+## Before you start
+
+- The connection's app registration has the Microsoft Graph delegated permission **Mail.ReadBasic**, in addition to Mail.Send. See [Register an app in Microsoft Entra ID](/guides/outlook#register-an-app-in-microsoft-entra-id).
+- The connection's secrets are set, as for a live send. See [Connection secrets](/reference/environment#connection-secrets).
+- You can sign in as the connection's mailbox. `export-sent` reuses the connection's saved sign-in. When that sign-in cannot provide Mail.ReadBasic access without asking, a run in a terminal starts a device-code sign-in, and a run without a terminal stops with a sign-in error.
+
+## Export and check
+
+<Steps>
+  <Step title="Export Sent Items since a date">
+    Export every message sent from the mailbox since the start of the campaign:
+
+    ```bash Terminal
+    npx mailroll-outlook export-sent -c acme/onboarding \
+      --connection outlook-1 \
+      --since 2026-01-15 -o sent.json
+    ```
+
+    - `--since` is a date in `YYYY-MM-DD` form, read as midnight UTC. Messages sent at or after that moment are exported, oldest first.
+    - `-o, --out` names a new file. mailroll refuses to overwrite an existing one, so pick a new name for every export. It checks this only when it writes the file, after it has read every page of Sent Items, so a long export to an existing path fails at the end with `cannot create <path> (it must not exist yet)` and exit code `2`, and the messages it read are not saved.
+
+    When it finishes, mailroll reports on stderr:
+
+    ```text Output
+    exported 3 Sent Items message(s) to sent.json
+    ```
+  </Step>
+  <Step title="Read the file">
+    The file holds every exported message:
+
+    ```json sent.json
+    {
+      "exportedAt": "2026-01-16T08:00:00.000Z",
+      "campaignId": "acme/onboarding",
+      "connectionId": "outlook-1",
+      "mailbox": "sender@example.com",
+      "since": "2026-01-15T00:00:00.000Z",
+      "count": 3,
+      "messages": [
+        {
+          "subject": "Welcome to Acme",
+          "to": ["ada@example.com"],
+          "cc": [],
+          "sentAt": "2026-01-15T09:30:01Z"
+        }
+      ]
+    }
+    ```
+
+    - `mailbox`: the connection's mailbox, so you can tell exports apart.
+    - `count`: the number of entries in `messages`.
+    - `messages[].to` and `messages[].cc`: the addresses as Microsoft Graph returns them, which may differ in letter case from your CSV.
+    - `messages[].sentAt`: the send time reported by Microsoft Graph.
+  </Step>
+  <Step title="Look for the uncertain recipients">
+    Search the file for each uncertain address. With [jq](https://jqlang.org), this prints the messages addressed to one recipient, ignoring letter case:
+
+    ```bash Terminal wrap
+    jq --arg who "alan@example.org" \
+      '.messages[] | select(any(.to[]; ascii_downcase == $who))' sent.json
+    ```
+
+    Compare `sentAt` with the time of the uncertain send: the `at` field of the recipient's entry in the list's history file. See [Send history](/guides/history).
+  </Step>
+  <Step title="Resend only what is missing">
+    For each uncertain recipient with no matching message, resend deliberately:
+
+    ```bash Terminal
+    npx mailroll send -c acme/onboarding -t welcome \
+      --connection outlook-1 -m live --confirm \
+      --policy subset --recipients alan@example.org
+    ```
+  </Step>
+</Steps>
+
+If the campaign used several connections, export each one: a recipient's message is in the Sent Items of the connection that sent it. The `connectionId` of an uncertain recipient is recorded in the list's history.
+
+## Limits and safety
+
+- **Read-only.** `export-sent` only reads Sent Items. It asks for Mail.ReadBasic, which lets it read message properties such as subject, recipients and time, not message bodies.
+- **Personal data.** The file contains recipient addresses. It is created readable only by your user, and only after every page has been read, so a failed export leaves no partial file.
+- **Size.** Messages are read in pages of 100, up to 10,000 pages. A larger export stops with an error; use a later `--since` date.
+- **Throttling.** If Microsoft Graph answers HTTP 429, mailroll waits and retries the page, up to 5 times, waiting at most 60 seconds each time.
+- **Errors.** HTTP 401 or 403 stops the export with `Microsoft Graph refused Sent Items access (HTTP 403) — is Mail.ReadBasic granted?`. See [Troubleshooting](/troubleshooting) for other messages.
+
+## Related
+
+- [`mailroll-outlook export-sent`](/outlook/export-sent): every option.
+- [Send history](/guides/history): uncertain sends and how to resolve them.
+- [Run again safely](/guides/resending): the `subset` policy.

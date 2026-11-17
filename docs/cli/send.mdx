@@ -1,0 +1,341 @@
+---
+title: "send"
+description: "Reference for mailroll send: every option, how options interact, the run summary, the JSON output and the exit codes."
+icon: "send"
+---
+
+`mailroll send` runs one or more lists of a campaign in dry-run, test or live mode, without the menu. Use it in scripts and CI, or whenever you already know exactly what to run.
+
+## mailroll send
+
+The command takes a campaign, one or more templates, one or more connections and a mode. Everything else is optional.
+
+```bash Terminal
+mailroll send -c <group/name> -t <ids> --connection <ids> \
+  -m <dry-run|test|live> [options]
+```
+
+A run is built from these inputs:
+
+- **Lists.** Every selected template is combined with every CSV file given in `--data`, or with the template's default CSV file. Each combination is one list with its own history. Repeated templates, files and connections are counted once.
+- **Mode.** The mode decides where each message goes: rendered only, to one test inbox, or to the real recipient. [Compare the modes](/guides/sending#compare-the-modes) explains each one.
+- **Policy.** The policy decides who in each list receives a message, based on that list's history.
+
+`send` asks no questions when you give it everything it needs. In an interactive session it can still ask for a CC, and it starts a Microsoft sign-in when a test or live run has no saved one. Without a terminal it never waits: it stops with exit code `2` instead. See [Interactive and non-interactive sessions](/cli/overview).
+
+## Options
+
+Every option below can be combined with the [global options](/cli/overview#global-options), such as `-C, --campaigns` and `-q, --quiet`. Options that take several values accept a comma-separated list; spaces around each value are removed and empty values are ignored.
+
+### Required
+
+<ResponseField name="-c, --campaign <group/name>" type="string" required>
+  The campaign id: the campaign's folder path under the campaigns folder, such as `acme/onboarding`.
+
+  **Constraints:** the campaign must exist, otherwise the run stops with `campaign "…" not found`.
+</ResponseField>
+
+<ResponseField name="-t, --template <ids>" type="string (comma-separated)" required>
+  The templates to run, by folder name, such as `welcome` or `welcome,reminder`.
+
+  **Constraints:** every template must exist in the campaign (`template "…" not found in campaign "…"`). A value with no template id in it, such as `","`, is rejected with `select at least one template`.
+</ResponseField>
+
+<ResponseField name="--connection <ids>" type="string (comma-separated)" required>
+  The connections that send the messages, by `id`. With several connections, recipients are distributed among them in turn and each connection sends its share in parallel with the others.
+
+  **Constraints:** every connection must exist in the campaign (`connection "…" does not exist in campaign "…"`), and every selected template must declare every given connection in its `connectionIds` (`template "…" does not declare connection "…" (it declares: …)`). An empty value is rejected with `select at least one connection`.
+</ResponseField>
+
+<ResponseField name="-m, --mode <mode>" type="string" required>
+  What to do with each message.
+
+  **Values:**
+  - `dry-run`: renders every message and sends nothing. It needs no secrets or sign-in and records no history.
+  - `test`: sends every message to the test inbox given by `--to`. CC addresses receive real copies. No history is recorded.
+  - `live`: sends to the real recipients and records the outcome of each send in the list's history.
+
+  **Constraints:** any other value is rejected by the option parser.
+</ResponseField>
+
+### Choose lists
+
+<ResponseField name="-d, --data <files>" type="string (comma-separated)">
+  The CSV files to use, by file name inside each template's `data/` folder, such as `recipients.csv` or `march.csv,april.csv`. Every selected template is run once with every given file.
+
+  **When omitted:** each template uses `recipients.csv` if it exists, otherwise its only CSV file. A template with several CSV files and no `recipients.csv` stops the run with `template "…" has multiple CSV files; choose one with --data (…)`.
+
+  **Constraints:** the name must match a file in the folder exactly, otherwise the run stops with `data file "…" not found in template "…"`. Because every template is combined with every file, each file must exist in every selected template. To run different files for different templates, run `send` once per template.
+</ResponseField>
+
+### Recipients, policy and CC
+
+<ResponseField name="-p, --policy <policy>" type="string" default="pending">
+  Which recipients of each list receive a message, given that list's history.
+
+  **Values:**
+  - `pending`: everyone not yet sent, including previous failures. Recipients already sent or uncertain are skipped.
+  - `failed-only`: only recipients whose last send failed.
+  - `force-all`: everyone in the list, including recipients already sent and uncertain ones.
+  - `subset`: only the addresses given in `--recipients`.
+
+  **When omitted:** `pending`.
+
+  [Choose a policy](/guides/resending#choose-a-policy) explains each policy and when duplicates can happen.
+</ResponseField>
+
+<ResponseField name="--recipients <emails>" type="string (comma-separated)">
+  The recipients for `--policy subset`. They are matched against each list without regard to letter case. A requested address that is not in a list, or that the template's validator rejected, is skipped for that list.
+
+  **Required when** `--policy subset` is used. Without it, or with no address in it, the command stops with `subset policy requires at least one recipient`.
+
+  **Constraints:** with any other policy it is rejected with `--recipients only applies to --policy subset`. An invalid address is rejected with `invalid --recipients address "…": …`.
+</ResponseField>
+
+<ResponseField name="--cc <emails>" type="string (comma-separated)">
+  The CC addresses for every list in the run. They replace the template's `cc` setting. Pass `--cc ""` to send without CC. Addresses that differ only in letter case are kept once.
+
+  **When omitted:** each list uses its template's `cc` setting. If a list whose template allows CC has none, mailroll asks once for a CC for every such list, offering the addresses in `CC_RECIPIENT`. Without a terminal it stops with `no --cc given and no terminal to ask for one; pass --cc <email[,email...]> (or --cc "" for none)` and exit code `2`, even in dry-run mode. [CC policy and CC addresses](/reference/configuration#cc-policy-and-cc-addresses) has the complete rules.
+
+  **Constraints:** an invalid address is rejected with `invalid CC address "…": …`. A non-empty CC on a list whose template has `ccPolicy` `forbidden` stops the run with `template "…" does not allow CC (it would expose one recipient's message to a third party)`. In live mode, `--cc ""` on a list whose template has `ccPolicy` `required` stops the run with `template "…" requires at least one CC for a live send — …`.
+</ResponseField>
+
+### Test and live
+
+<ResponseField name="--to <email>" type="string">
+  The test inbox for `--mode test`. Every message goes to this address instead of the recipient's. The message content is still built from each recipient's row.
+
+  **When omitted:** the `TEST_RECIPIENT` environment variable. If neither is set, the command stops with `test mode requires --to <address> or TEST_RECIPIENT in the environment`.
+
+  **Constraints:** with another mode it is rejected with `--to only applies to --mode test`. An invalid address is rejected with `invalid test recipient "…": …`.
+</ResponseField>
+
+<ResponseField name="--confirm" type="boolean">
+  Confirms that you intend a real send.
+
+  **Required when** `--mode live` is used. Without it the command stops with `live mode requires --confirm to prevent an accidental real send`.
+
+  **Constraints:** with another mode it is rejected with `--confirm only applies to --mode live`.
+</ResponseField>
+
+### Previews
+
+<ResponseField name="--write-previews" type="boolean">
+  Saves each rendered message of a dry run as an HTML file, in `<previews-dir>/<template>/<list>/`. Each list's folder is deleted and recreated before that list runs, so it always holds the latest run only.
+
+  **When omitted:** a dry run renders every message, reports the counts and writes no files.
+
+  **Constraints:** with another mode it is rejected with `--write-previews only applies to --mode dry-run`. Two lists that would share a preview folder stop the run before anything is rendered. [Files](/reference/files) describes the file names and permissions.
+</ResponseField>
+
+<ResponseField name="--previews-dir <dir>" type="string" default="previews">
+  The root folder for `--write-previews`, relative to the current directory unless absolute.
+
+  **When omitted:** `previews`.
+
+  **Constraints:** without `--write-previews` it is rejected with `--previews-dir only applies to --write-previews`. A blank value is rejected with `--previews-dir needs a folder name`.
+</ResponseField>
+
+### Summary format
+
+<ResponseField name="--json" type="boolean">
+  Prints the run summary as JSON on stdout instead of text. See [JSON output](#json-output).
+
+  **When omitted:** the summary is printed as text on stdout.
+</ResponseField>
+
+## Rules and interactions
+
+Checks run in a fixed order, and nothing is sent until every one of them has passed:
+
+1. **Options.** Missing required options, unknown options and invalid choices are rejected first. Then each option is checked against the others, using the messages listed under each option above. All of these exit with `2`.
+2. **Preparation of every list.** For each list, mailroll validates the template, the connections and the CSV file, loads the plugin and the history, and reads every row. A problem in any list stops the run before the first message, with exit code `1`.
+3. **Secrets, CC and sign-in.** For test and live runs, the connection secrets must be set. Then the CC question is asked if needed. Then every connection is signed in, before any list is locked or sent.
+4. **Locks.** A live run locks the history of every list. If another run holds a lock, nothing is sent; see [Locks](/guides/history#locks).
+
+Some combinations deserve attention:
+
+- **Test mode applies the policy.** With the default `pending`, a list with live history skips everyone already sent, even though test sends go to the test inbox. Use `-p force-all` to render every row, or `-p subset` to render specific ones. Test mode never changes the history.
+- **CC copies are real in test mode.** CC addresses receive every test email. Pass `--cc ""` when you do not want that.
+- **Validator-rejected rows are never sent** in any mode. They are counted as skipped but do not make the run need attention.
+- **A CSV file that changes during a run** stops the run before its next list with `… changed after the run was prepared; nothing more was sent — run again`.
+
+<Warning>
+  `--mode live` sends real email. `-p force-all` resends to everyone, including people who already have the email and recipients whose outcome is uncertain. Run a dry run with the same options first and read its summary.
+</Warning>
+
+## Examples
+
+The examples use the quickstart campaign `acme/onboarding`, with template `welcome` and connection `outlook-1`.
+
+Render every message of the default list into preview files, without sending. `--cc ""` answers the CC question up front:
+
+```bash Terminal
+npx mailroll send -c acme/onboarding -t welcome \
+  --connection outlook-1 \
+  -m dry-run --cc "" --write-previews
+```
+
+Send every row to your own inbox, so you can check real delivery and rendering. `-p force-all` makes sure no row is skipped because of live history:
+
+```bash Terminal
+npx mailroll send -c acme/onboarding -t welcome \
+  --connection outlook-1 \
+  -m test --to qa@example.com --cc "" -p force-all
+```
+
+Send for real to everyone not yet sent, and save the JSON summary. This needs a saved sign-in when it runs without a terminal:
+
+```bash Terminal
+npx mailroll send -c acme/onboarding -t welcome \
+  --connection outlook-1 \
+  -m live --confirm --cc "" --json > summary.json
+```
+
+Retry only the recipients whose last send failed:
+
+```bash Terminal
+npx mailroll send -c acme/onboarding -t welcome \
+  --connection outlook-1 \
+  -m live --confirm --cc "" -p failed-only
+```
+
+Send to two specific recipients, for example after you confirmed in Sent Items that their uncertain sends never arrived:
+
+```bash Terminal
+npx mailroll send -c acme/onboarding -t welcome \
+  --connection outlook-1 \
+  -m live --confirm --cc "" -p subset \
+    --recipients ada@example.com,alan@example.org
+```
+
+Run two templates against two CSV files each, from two mailboxes, with one CC for every list. This runs four lists, and both templates must declare both connections and contain both files:
+
+```bash Terminal
+npx mailroll send -c acme/onboarding -t welcome,reminder \
+  -d march.csv,april.csv \
+  --connection outlook-1,outlook-2 -m live --confirm \
+    --cc team@example.com
+```
+
+## Output
+
+The summary goes to stdout. Prompts, sign-in instructions and progress logs go to stderr; see [Output streams](/cli/overview).
+
+### Text output
+
+The text summary has a header line with the campaign and mode, then one line per list. Here is a dry run with `--write-previews`:
+
+```text Output wrap
+acme/onboarding — dry-run
+  welcome · recipients.csv [pending] ok: rendered 3, failed 0, uncertain 0, not attempted 0, skipped 1
+    previews: previews/welcome/recipients
+```
+
+- The header adds the test inbox in test mode: `acme/onboarding — test (every message to qa@example.com)`.
+- Each list line shows the template, the CSV file, the policy in brackets, then `ok` or `needs attention`, then the counts. In dry-run mode the first count is `rendered`; otherwise it is `sent`. When the provider rejected a CC, the line ends with `, CC rejected on M message(s) (R required)`, counting messages, not addresses.
+- The line below shows `previews:` with the folder when previews were written, or `history:` with the history file in live mode.
+- A line about the history format follows when it applies: `history upgraded to v2; backups: …; older mailroll versions can no longer read it` after a live run upgraded the list, `history upgrade could not be confirmed; check <path> before using an older mailroll` when it could not confirm that, and `history is in the v1 format; the next live run upgrades it to v2 (one-way)` in a dry run or test send.
+
+Each recipient that needs attention gets its own line under its list:
+
+```text Output wrap
+acme/onboarding — live
+  welcome · recipients.csv [pending] needs attention: sent 1, failed 1, uncertain 1, not attempted 0, skipped 1
+    history: campaigns/acme/onboarding/templates/welcome/.state/recipients.json
+    failed: grace@example.com — [permanent] Microsoft Graph sendMail failed (HTTP 400): …
+      attempt 6f1d2c4e-8a3b-4f0e-9c71-2b5e8d0a4f13 (for tracing; not proof of delivery)
+    UNCERTAIN: alan@example.org — no answer from Microsoft Graph within 120 s; the message may or may not have been sent — check before resending
+      attempt 0c9e7b52-1d4a-4e8f-b3a6-7f2d9c1e5a80 (for tracing; not proof of delivery)
+```
+
+The label is `failed`, `UNCERTAIN`, `not attempted`, `still UNCERTAIN` (uncertain from an earlier run and skipped by this policy) or `CC REJECTED (required)`. A line `attempt … · provider id … (for tracing; not proof of delivery)` under an entry shows the evidence mailroll has for it; each part appears only when mailroll has it. A rejected optional CC is shown as `note: CC rejected (optional): <address> — <cc>` in a live run, or `note: CC rejected (optional on the test send to <inbox>, nothing recorded): <address> — <cc>` in a test send, and is not an attention item. If the run stopped before every list ran, a final `stopped before the run finished:` line gives the reason, followed by one `not run:` line per list that never started.
+
+### JSON output
+
+With `--json`, the same information is printed as one JSON object. A dry run with previews prints:
+
+```json Output wrap
+{
+  "campaignId": "acme/onboarding",
+  "mode": "dry-run",
+  "needsAttention": false,
+  "lists": [
+    {
+      "templateId": "welcome",
+      "dataFile": "recipients.csv",
+      "policy": "pending",
+      "statePath": "campaigns/acme/onboarding/templates/welcome/.state/recipients.json",
+      "previewDir": "previews/welcome/recipients",
+      "counts": {
+        "total": 4,
+        "sent": 3,
+        "failed": 0,
+        "uncertain": 0,
+        "notAttempted": 0,
+        "skipped": 1,
+        "ccRejectedMessages": 0,
+        "requiredCcRejectedMessages": 0
+      },
+      "attention": [],
+      "ccRejected": [],
+      "history": { "before": "none", "upgraded": false }
+    }
+  ]
+}
+```
+
+<ResponseField name="campaignId" type="string" required>
+  The campaign that ran.
+</ResponseField>
+
+<ResponseField name="mode" type='"dry-run" | "test" | "live"' required>
+  The mode of the run.
+</ResponseField>
+
+<ResponseField name="needsAttention" type="boolean" required>
+  `true` when any list has an entry in `attention`, or when the run was interrupted. A run that ends normally exits with `1` exactly when this is `true`.
+</ResponseField>
+
+<ResponseField name="interrupted" type="object">
+  Present only when an error or Ctrl-C stopped the run after at least one list had run, fully or partly.
+
+  - `reason` (string): the error or cancellation that stopped the run.
+  - `notRun` (array of `{ templateId, dataFile }`): the lists that never started, possibly none. They stay pending for the next run.
+</ResponseField>
+
+<ResponseField name="lists" type="array" required>
+  One entry per list that ran, in the order they ran.
+
+  - `templateId`, `dataFile`: the list.
+  - `policy`: the policy applied to this list.
+  - `statePath`: the list's history file. It is reported in every mode, but only live mode writes it.
+  - `previewDir`: the preview folder. Present only when previews were written.
+  - `counts.total`: every row and requested address considered: `sent + failed + uncertain + notAttempted + skipped`.
+  - `counts.sent`: messages sent. In dry-run mode this counts rendered messages; in test mode, messages sent to the test inbox.
+  - `counts.failed`, `counts.uncertain`, `counts.notAttempted`: sends that failed, whose outcome is unknown, or that never started because the run or the connection stopped.
+  - `counts.skipped`: rows rejected by the template's validator, plus recipients the policy skipped.
+  - `counts.ccRejectedMessages`, `counts.requiredCcRejectedMessages`: messages accepted for the main recipient whose CC the provider rejected, and those of them whose template required a CC. They count messages, not CC addresses.
+  - `attention`: the entries that need attention, each with `address`, `status` and `detail`, plus `attemptId` and, for `cc-rejected`, `providerMessageId` when known.
+  - `ccRejected`: one entry per message with a rejected CC, required or optional: `address`, `cc`, `required`, and `attemptId` and `providerMessageId` when known.
+  - `history`: `before` (`"none"`, `"v1"` or `"v2"`), `upgraded`, `backups` when `upgraded` is `true`, and `unconfirmed: true` when a live run could not confirm an upgrade. See [Automation](/guides/automation).
+</ResponseField>
+
+The `status` of an `attention` entry is one of these, and `detail` explains it:
+
+- `failed`: the send failed. `detail` is `[category] message`, where the category is `permanent`, `transient` or `throttled`. An authentication failure is never reported as `failed`: the connection is quarantined, and the current and remaining recipients of that connection in the list appear as `not-attempted` with the quarantine reason.
+- `uncertain`: mailroll cannot know whether the message arrived. `detail` ends with `— check before resending`. See [Uncertain sends](/guides/history#uncertain-sends).
+- `not-attempted`: the send never started, for example after Ctrl-C or because the connection stopped. `detail` gives the reason.
+- `held-uncertain`: uncertain from an earlier run and skipped by this policy. `detail` is `still uncertain from an earlier run`.
+- `cc-rejected`: the provider **accepted** the message for `address`, but rejected a CC that the template requires. The recipient is `sent` and is not sent again. In a test send, `detail` names the test address and says that nothing was recorded. See [Rejected CC](/guides/history#rejected-cc).
+
+## Exit codes
+
+`send` exits with `0` when every list finished and nothing needs attention, `1` when a list needs attention or the run failed during preparation or sending, `2` when an option is missing, invalid or does not apply, or when a CC question or a sign-in needs a terminal and there is none, and `130` after Ctrl-C. The [exit code table](/cli/overview#exit-codes) is authoritative and lists every case.
+
+## Related
+
+- [Sending](/guides/sending): modes, the recommended flow, pacing and retries
+- [Resending](/guides/resending): policies and when duplicates can happen
+- [Run without a terminal](/guides/automation#run-without-a-terminal): using `send` in scripts and CI
+- [`mailroll status`](/cli/status): check list counts before and after a run
