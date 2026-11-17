@@ -120,6 +120,22 @@ const v1 = (list: { readonly template: { readonly id: string }; readonly snapsho
   statePath: list.snapshotPath,
 });
 
+async function compactWithV1Writer(
+  store: FrozenV1FileStateStore,
+  list: ReturnType<typeof v1>,
+  state: TemplateStateV1,
+): Promise<void> {
+  const compaction = store.compact(list, state);
+
+  if (process.platform === 'win32') {
+    await expect(compaction).rejects.toMatchObject({ code: 'EPERM', syscall: 'fsync' });
+
+    return;
+  }
+
+  await compaction;
+}
+
 const mixedList = () =>
   stageList(root, { snapshot: fixture('snapshot.json'), journal: fixture('journal-mixed.jsonl') });
 
@@ -248,7 +264,7 @@ describe('v1 history: unknown fields', () => {
 
     const frozen = new FrozenV1FileStateStore();
 
-    await frozen.compact(v1(list), await frozen.load(v1(list)));
+    await compactWithV1Writer(frozen, v1(list), await frozen.load(v1(list)));
 
     const written = readFileSync(list.snapshotPath, 'utf8');
 
@@ -256,14 +272,18 @@ describe('v1 history: unknown fields', () => {
   });
 });
 
-describe('v1 history: compaction by the published v1 writer, and crashes around it', () => {
-  it('writes the snapshot as 2-space JSON with a final newline, mode 0600, and removes the journal', async () => {
+describe('v1 history: compaction by the 0.1.0 writer, and crashes around it', () => {
+  it('writes the snapshot as 2-space JSON with a final newline and mode 0600, and removes the journal where the folder flush succeeds', async () => {
     const list = mixedList();
 
-    await new FrozenV1FileStateStore().compact(v1(list), MIXED);
+    await compactWithV1Writer(new FrozenV1FileStateStore(), v1(list), MIXED);
 
     expect(readFileSync(list.snapshotPath, 'utf8')).toBe(`${JSON.stringify(MIXED, null, 2)}\n`);
-    expect(readdirSync(dirname(list.snapshotPath))).toEqual([basename(list.snapshotPath)]);
+    expect(readdirSync(dirname(list.snapshotPath)).sort()).toEqual(
+      process.platform === 'win32'
+        ? [basename(list.snapshotPath), basename(list.journalPath)].sort()
+        : [basename(list.snapshotPath)],
+    );
 
     expectPrivateFile(list.snapshotPath);
   });
@@ -281,7 +301,7 @@ describe('v1 history: compaction by the published v1 writer, and crashes around 
     const store = new FrozenV1FileStateStore();
     const folded = await store.load(v1(list));
 
-    await store.compact(v1(list), folded);
+    await compactWithV1Writer(store, v1(list), folded);
     writeFileSync(list.journalPath, fixture('journal-mixed.jsonl'));
 
     expect(await new FileStateStore().load(list.template)).toEqual(folded);
@@ -292,7 +312,7 @@ describe('v1 history: compaction by the published v1 writer, and crashes around 
     const store = new FrozenV1FileStateStore();
     const folded = await store.load(v1(list));
 
-    await store.compact(v1(list), { ...folded, updatedAt: '2026-01-16T00:00:00.000Z' });
+    await compactWithV1Writer(store, v1(list), { ...folded, updatedAt: '2026-01-16T00:00:00.000Z' });
     writeFileSync(list.journalPath, fixture('journal-mixed.jsonl'));
 
     const replayed = await new FileStateStore().load(list.template);
