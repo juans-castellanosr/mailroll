@@ -446,7 +446,7 @@ describe('the documented JSON output', () => {
     const docSummaries = documented.filter(
       ({ value }) => typeof value === 'object' && value !== null && 'lists' in value && 'mode' in value,
     );
-    const docStatuses = documented.filter(({ block }) => block.page === join('cli', 'status.mdx'));
+    const docStatuses = documented.filter(({ block }) => block.page === 'cli/status.mdx');
 
     expect(docSummaries.length).toBeGreaterThanOrEqual(2);
     expect(docStatuses).toHaveLength(1);
