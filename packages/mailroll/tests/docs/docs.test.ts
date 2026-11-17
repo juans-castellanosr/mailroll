@@ -1,7 +1,7 @@
 import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
-import { dirname, join, relative, resolve } from 'node:path';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import { Writable } from 'node:stream';
 import ts from 'typescript';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -24,6 +24,7 @@ const DOCS = resolve(PACKAGE, '../../docs');
 const FIXTURE = join(PACKAGE, 'tests/fixtures/campaigns/acme/onboarding');
 const NODE_TYPES = dirname(dirname(createRequire(import.meta.url).resolve('@types/node/package.json')));
 const QUICKSTART_PREFIX = 'campaigns/acme/onboarding/';
+const posixRelative = (from: string, to: string): string => relative(from, to).split(sep).join('/');
 
 const PUBLIC_API_COMPILER_OPTIONS: ts.CompilerOptions = {
   strict: true,
@@ -78,7 +79,7 @@ function codeBlocks(page: string): CodeBlock[] {
       .map((line) => (line.startsWith(indent) ? line.slice(indent.length) : line))
       .join('\n');
 
-    blocks.push({ page: relative(DOCS, page), language, title, code });
+    blocks.push({ page: posixRelative(DOCS, page), language, title, code });
   }
 
   return blocks;
@@ -128,7 +129,7 @@ describe('the documentation', () => {
 
     expect(listed.filter((page) => !existsSync(join(DOCS, `${page}.mdx`)))).toEqual([]);
 
-    const onDisk = pages().map((page) => relative(DOCS, page).replace(/\.mdx$/, ''));
+    const onDisk = pages().map((page) => posixRelative(DOCS, page).replace(/\.mdx$/, ''));
 
     expect(onDisk.sort()).toEqual([...listed].sort());
   });
@@ -139,7 +140,7 @@ describe('the documentation', () => {
         .filter((block) => block.title?.startsWith(QUICKSTART_PREFIX) === true)
         .map((block) => [block.title?.slice(QUICKSTART_PREFIX.length) ?? '', block.code]),
     );
-    const fixture = filesUnder(FIXTURE).map((file) => relative(FIXTURE, file));
+    const fixture = filesUnder(FIXTURE).map((file) => posixRelative(FIXTURE, file));
 
     expect([...shown.keys()].sort()).toEqual(fixture.sort());
     for (const file of fixture) {
