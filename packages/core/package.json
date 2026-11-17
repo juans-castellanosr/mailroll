@@ -1,0 +1,53 @@
+{
+  "name": "@mailroll/core",
+  "version": "0.1.0",
+  "description": "The provider-independent core of mailroll: the run engine, the sender/0 integration contract and its validators, send history planning and rendering. No Node.js built-ins and no dependencies; runs in Node.js and browsers.",
+  "keywords": [
+    "email",
+    "campaign",
+    "mail-merge",
+    "sender",
+    "integration-contract",
+    "mailroll"
+  ],
+  "homepage": "https://github.com/juans-castellanosr/mailroll/tree/main/packages/core#readme",
+  "bugs": {
+    "url": "https://github.com/juans-castellanosr/mailroll/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/juans-castellanosr/mailroll.git",
+    "directory": "packages/core"
+  },
+  "license": "MIT",
+  "author": "Juan Sebastian Castellanos Rivillas",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "default": "./dist/index.mjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "types": "./dist/index.d.mts",
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22.18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.src.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:package": "node scripts/verify-package.ts",
+    "test:browser": "node ../../scripts/verify-browser-bundle.ts dist/index.mjs",
+    "check:package": "publint --strict && attw --pack . --profile esm-only",
+    "prepack": "pnpm run build"
+  }
+}

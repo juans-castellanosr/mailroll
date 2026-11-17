@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@mailroll/core": ["../core/src/index.ts"],
+      "mailroll": ["../mailroll/src/exports/node.ts"],
+      "@mailroll/outlook": ["src/index.ts"]
+    }
+  },
+  "include": ["src", "tests", "scripts", "vitest.config.ts", "tsdown.config.ts"]
+}

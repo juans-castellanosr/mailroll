@@ -1,0 +1,5 @@
+{
+  "id": "outlook-1",
+  "kind": "outlook",
+  "mailbox": "sender@example.com"
+}

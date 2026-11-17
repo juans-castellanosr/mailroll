@@ -1,0 +1,8 @@
+{
+  "ccPolicy": "optional",
+  "connectionIds": ["outlook-1"],
+  "subjectTemplate": "Welcome to Acme",
+  "context": {
+    "portalUrl": "https://example.com/start"
+  }
+}

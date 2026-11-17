@@ -1,0 +1,18 @@
+{
+  "name": "acme-tripwire",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A test-only package that leaves a marker file when its code runs, to prove mailroll never loads undeclared integrations.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js"
+  ],
+  "peerDependencies": {
+    "@mailroll/core": "^0.1.0"
+  }
+}

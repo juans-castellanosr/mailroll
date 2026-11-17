@@ -1,0 +1,85 @@
+{
+  "name": "mailroll",
+  "version": "0.1.0",
+  "description": "Send personalized email campaigns from CSV lists with per-list send history, safe resends, dry-run previews and a guided CLI. Node SDK plus a browser-safe core.",
+  "keywords": [
+    "email",
+    "campaign",
+    "mail-merge",
+    "csv",
+    "mjml",
+    "cli",
+    "bulk-email",
+    "newsletter"
+  ],
+  "homepage": "https://github.com/juans-castellanosr/mailroll/tree/main/packages/mailroll#readme",
+  "bugs": {
+    "url": "https://github.com/juans-castellanosr/mailroll/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/juans-castellanosr/mailroll.git",
+    "directory": "packages/mailroll"
+  },
+  "license": "MIT",
+  "author": "Juan Sebastian Castellanos Rivillas",
+  "type": "module",
+  "sideEffects": [
+    "./dist/cli.mjs"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "default": "./dist/index.mjs"
+    },
+    "./core": {
+      "types": "./dist/core.d.mts",
+      "default": "./dist/core.mjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "types": "./dist/index.d.mts",
+  "bin": {
+    "mailroll": "./dist/cli.mjs"
+  },
+  "files": [
+    "dist",
+    "!dist/cli.d.mts"
+  ],
+  "engines": {
+    "node": ">=22.18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:package": "node scripts/verify-package.ts",
+    "test:integrations": "node scripts/verify-integrations.ts",
+    "test:browser": "node ../../scripts/verify-browser-bundle.ts dist/core.mjs",
+    "check:package": "publint --strict && attw --pack . --profile esm-only",
+    "prepack": "pnpm run build"
+  },
+  "dependencies": {
+    "@mailroll/core": "workspace:^",
+    "@inquirer/prompts": "^7.2.0",
+    "commander": "^15.1.0",
+    "csv-parse": "^7.0.3",
+    "zod": "^4.6.7"
+  },
+  "peerDependencies": {
+    "mjml": "^5.4.1"
+  },
+  "peerDependenciesMeta": {
+    "mjml": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/mjml": "^5.4.2",
+    "mjml": "^5.4.1"
+  }
+}

@@ -1,0 +1,12 @@
+dist/
+coverage/
+previews/
+/campaigns/
+/packages/*/campaigns/
+pnpm-lock.yaml
+**/compiled.html
+**/*.mjml
+.claude/
+.pack/
+*.mdx
+packages/mailroll/tests/fixtures/state-v1/

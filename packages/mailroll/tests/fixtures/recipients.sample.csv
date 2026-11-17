@@ -1,0 +1,6 @@
+username,firstname,lastname,email,phone1,course1,role1,group1,password
+ada.lovelace,Ada,Lovelace,ada@example.edu,555-0001,Course A,teacher,g1,Fake-Pass-1
+alan.turing,Alan,Turing,alan@example.edu,555-0002,Course A,teacher,g1,Fake-Pass-2
+grace.hopper,,Hopper,grace@example.edu,,Course B,teacher,,Fake-Pass-3
+bad.row,No,Email,not-an-email,,Course C,teacher,,Fake-Pass-4
+missing.pass,Missing,Pass,missing@example.edu,,Course D,teacher,,
