@@ -64,8 +64,14 @@ function streamNode(args: readonly string[], options: ExecFileSyncOptions): void
   execFileSync(process.execPath, args, { ...options, stdio: 'inherit' });
 }
 
+const BARE_COMMAND = /^[A-Za-z0-9._-]+$/;
+
 export function windowsCommandLine(command: string, args: readonly string[]): string {
-  return [command, ...args].map((part) => `"${part.replaceAll('"', '""')}"`).join(' ');
+  if (!BARE_COMMAND.test(command)) {
+    throw new Error(`refusing to run ${JSON.stringify(command)}: only a bare command name found on PATH is allowed`);
+  }
+
+  return [command, ...args.map((part) => `"${part.replaceAll('"', '""')}"`)].join(' ');
 }
 
 function packageManagerCommand(pm: PackageManager): { readonly command: string; readonly prefix: readonly string[] } {
