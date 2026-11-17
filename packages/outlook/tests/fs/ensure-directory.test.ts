@@ -1,13 +1,28 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative, sep } from 'node:path';
+import type * as FsPromises from 'node:fs/promises';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { ensureDirectory } from '../../src/fs/ensure-directory';
 
 const injected = vi.hoisted(() => ({
   synced: [] as string[],
   failure: undefined as Error | undefined,
+  reportedFirstCreated: undefined as ((actual: string | undefined) => string | undefined) | undefined,
 }));
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof FsPromises>();
+
+  return {
+    ...actual,
+    mkdir: async (...args: Parameters<typeof actual.mkdir>): Promise<string | undefined> => {
+      const created = await actual.mkdir(...args);
+
+      return injected.reportedFirstCreated === undefined ? created : injected.reportedFirstCreated(created);
+    },
+  };
+});
 
 vi.mock('../../src/fs/sync-directory', () => ({
   syncDirectory: (dir: string): Promise<void> => {
@@ -39,6 +54,7 @@ beforeAll(() => {
 afterEach(() => {
   injected.synced = [];
   injected.failure = undefined;
+  injected.reportedFirstCreated = undefined;
 });
 afterAll(() => {
   rmSync(root, { recursive: true, force: true });
@@ -104,6 +120,23 @@ describe('creating the token cache folder durably', () => {
     expect(injected.synced).toEqual([join(base, 'tokens'), base]);
     expect(existsSync(join(base, 'tokens', 'campaign'))).toBe(true);
   });
+
+  it.each([
+    ['in another form', (actual: string | undefined) => (actual === undefined ? undefined : `\\\\?\\${actual}`)],
+    ['as nothing', () => undefined],
+  ])(
+    'flushes exactly the parents of the missing levels when mkdir reports the first folder it created %s',
+    async (_label, report) => {
+      const base = freshRoot();
+
+      mkdirSync(join(base, 'tokens'));
+      injected.reportedFirstCreated = report;
+
+      await ensureDirectory(join(base, 'tokens', 'campaign', 'connection'), 0o700);
+
+      expect(injected.synced).toEqual([join(base, 'tokens', 'campaign'), join(base, 'tokens')]);
+    },
+  );
 
   it('propagates a flush failure and flushes no further level', async () => {
     const base = freshRoot();

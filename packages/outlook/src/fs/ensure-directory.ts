@@ -1,20 +1,43 @@
-import { mkdir } from 'node:fs/promises';
+import { mkdir, stat } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
+import { isEnoent } from './is-enoent';
 import { syncDirectory } from './sync-directory';
 
 export async function ensureDirectory(dir: string, mode: number): Promise<void> {
   const target = resolve(dir);
-  const created = await mkdir(target, { recursive: true, mode });
+  const missing = await missingLevels(target);
 
-  if (created === undefined) {
-    return;
+  await mkdir(target, { recursive: true, mode });
+
+  for (const level of missing) {
+    await syncDirectory(dirname(level));
+  }
+}
+
+async function missingLevels(target: string): Promise<string[]> {
+  const missing: string[] = [];
+
+  for (let level = target; !(await exists(level)); level = dirname(level)) {
+    missing.push(level);
+
+    if (dirname(level) === level) {
+      break;
+    }
   }
 
-  for (let level = target; ; level = dirname(level)) {
-    await syncDirectory(dirname(level));
+  return missing;
+}
 
-    if (level === created || dirname(level) === level) {
-      return;
+async function exists(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+
+    return true;
+  } catch (error) {
+    if (isEnoent(error)) {
+      return false;
     }
+
+    throw error;
   }
 }
