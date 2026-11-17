@@ -231,6 +231,25 @@ describe('a lock replaced by hand while it is being recovered', () => {
     expect(readFileSync(join(dir, kept[0] ?? ''), 'utf8')).toBe(replacement);
   });
 
+  it('never removes a replacement that took the same file number as the lock it replaced', async () => {
+    writeFileSync(lockPath, STALE);
+    injected.faults.push({
+      operation: 'rename',
+      matches: named('list.json.lock'),
+      act: () => {
+        writeFileSync(lockPath, replacement);
+      },
+    });
+
+    const error = await refusal(acquireFileLock(lockPath, 'the list'));
+    const kept = readdirSync(dir);
+
+    expect(kept).toHaveLength(1);
+    expect(kept[0]).toMatch(/^list\.json\.lock\.stale-/);
+    expect(error.message).toContain(`the replacement is kept as ${join(dir, kept[0] ?? '')}`);
+    expect(readFileSync(join(dir, kept[0] ?? ''), 'utf8')).toBe(replacement);
+  });
+
   it('keeps the moved file under its new name and leaves alone a lock that took the path meanwhile', async () => {
     const newcomer = JSON.stringify({ pid: process.pid, host: hostname(), startedAt: 'T6', token: 'newcomer' });
 
