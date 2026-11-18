@@ -301,6 +301,30 @@ export function packDirectory(packageDir: string, destination: string): string {
   return tarballIn(destination, readManifest(packageDir));
 }
 
+export function extractPackageTarball(tarball: string, destination: string): string {
+  const result = spawnSync('tar', ['-xzf', '-'], {
+    cwd: destination,
+    input: readFileSync(tarball),
+    encoding: 'utf8',
+  });
+  const outcome =
+    result.signal === null ? `exit code ${String(result.status ?? 'unknown')}` : `signal ${result.signal}`;
+
+  if (result.error !== undefined || result.status !== 0 || result.signal !== null) {
+    throw new Error(`tar could not extract ${tarball} into ${destination} (${outcome}): ${result.stderr.trim()}`, {
+      cause: result.error,
+    });
+  }
+
+  const extracted = join(destination, 'package');
+
+  if (!existsSync(join(extracted, 'package.json'))) {
+    throw new Error(`${tarball} does not contain package/package.json, so it is not an npm package tarball`);
+  }
+
+  return extracted;
+}
+
 const MIN_DEFINITION_LENGTH = 80;
 
 function filesUnder(dir: string): string[] {

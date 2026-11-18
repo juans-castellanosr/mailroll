@@ -1,9 +1,9 @@
 import { execSync, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { captureNode, windowsCommandLine } from '../../scripts/consumer-project.ts';
+import { captureNode, extractPackageTarball, windowsCommandLine } from '../../scripts/consumer-project.ts';
 
 const LAUNCHED_ARGUMENTS = ['', 'a b', 'say "hi"', '""', 'a&echo injected', 'a|b', '(a)', 'C:\\Users\\Ana Ruiz\\store'];
 
@@ -42,6 +42,34 @@ function withLauncherOnPath(use: (workspace: LauncherWorkspace) => void): void {
   }
 }
 
+interface TarballFixture {
+  readonly tarball: string;
+  readonly destination: string;
+}
+
+function withTarball(entries: Readonly<Record<string, string>>, use: (fixture: TarballFixture) => void): void {
+  const base = mkdtempSync(join(tmpdir(), 'mailroll tarball '));
+  const source = join(base, 'source');
+  const destination = join(base, 'destination');
+
+  try {
+    mkdirSync(destination);
+
+    for (const [path, content] of Object.entries(entries)) {
+      mkdirSync(dirname(join(source, path)), { recursive: true });
+      writeFileSync(join(source, path), content);
+    }
+
+    const roots = [...new Set(Object.keys(entries).map((path) => path.split('/')[0] ?? path))];
+    const packed = spawnSync('tar', ['-czf', 'fixture.tgz', ...roots], { cwd: source, encoding: 'utf8' });
+
+    expect(packed.status, packed.stderr).toBe(0);
+    use({ tarball: join(source, 'fixture.tgz'), destination });
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+}
+
 function launched(output: string): { readonly dir: string; readonly argv: readonly string[] } {
   return JSON.parse(output) as { readonly dir: string; readonly argv: readonly string[] };
 }
@@ -64,6 +92,36 @@ describe('the package verification helper', () => {
 
   it.each(['', 'npm & calc', 'C:\\tools\\npm', '"npm"'])('refuses %j as a Windows command name', (command) => {
     expect(() => windowsCommandLine(command, ['install'])).toThrow(/only a bare command name found on PATH is allowed/);
+  });
+
+  it('extracts a package tarball given by an absolute path, whatever tar is first on PATH', () => {
+    const entries = { 'package/package.json': '{"name":"probe"}', 'package/lib/index.js': 'export {};' };
+
+    withTarball(entries, ({ tarball, destination }) => {
+      const extracted = extractPackageTarball(tarball, destination);
+
+      expect(extracted).toBe(join(destination, 'package'));
+      expect(readFileSync(join(extracted, 'package.json'), 'utf8')).toBe(entries['package/package.json']);
+      expect(readFileSync(join(extracted, 'lib', 'index.js'), 'utf8')).toBe(entries['package/lib/index.js']);
+    });
+  });
+
+  it('stops with the exit code and the message of tar when an archive cannot be extracted', () => {
+    withTarball({ 'package/package.json': '{}' }, ({ tarball, destination }) => {
+      writeFileSync(tarball, 'not a gzip archive');
+
+      expect(() => extractPackageTarball(tarball, destination)).toThrow(
+        /^tar could not extract .*fixture\.tgz into .* \(exit code [1-9]\d*\): \S/,
+      );
+    });
+  });
+
+  it('refuses an archive that is not laid out as an npm package tarball', () => {
+    withTarball({ 'other/package.json': '{}' }, ({ tarball, destination }) => {
+      expect(() => extractPackageTarball(tarball, destination)).toThrow(
+        /fixture\.tgz does not contain package\/package\.json, so it is not an npm package tarball/,
+      );
+    });
   });
 
   it.runIf(process.platform === 'win32')(
