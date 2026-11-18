@@ -1,6 +1,6 @@
 {
   "name": "@mailroll/core",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "The provider-independent core of mailroll: the run engine, the sender/0 integration contract and its validators, send history planning and rendering. No Node.js built-ins and no dependencies; runs in Node.js and browsers.",
   "keywords": [
     "email",
