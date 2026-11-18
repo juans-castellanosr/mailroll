@@ -1,12 +1,6 @@
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { ResolvedTemplate } from '@mailroll/core';
-
-export const STATE_V1_FIXTURES = resolve(import.meta.dirname, '../fixtures/state-v1');
-
-export function fixture(name: string): string {
-  return readFileSync(join(STATE_V1_FIXTURES, name), 'utf8');
-}
 
 export interface StagedList {
   readonly template: ResolvedTemplate;

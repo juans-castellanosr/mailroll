@@ -90,15 +90,13 @@ The file names share a stem made from the CSV's name without `.csv`: every run o
 
 A CSV whose name has no letter or digit is rejected, and so are two CSVs that produce the same stem (`VIP list.csv` and `VIP-list.csv`), because their histories would mix.
 
-A list upgraded from the history format of mailroll 0.1 also keeps `<stem>.json.v1-backup` and `<stem>.jsonl.v1-backup`; see [Upgrade from the v1 format](#upgrade-from-the-v1-format). No CSV can produce those names.
-
 ### Who writes them
 
-Only live sends write state. Dry runs, test sends, `mailroll status` and the menu read it, to apply the resend policy and show it, but never change it, and never upgrade a v1 history. mailroll creates the `.state/` folder the first time it needs it. Each file is created with permissions `0600` (read and write for your user only). The journal backup `<stem>.jsonl.v1-backup` is the v1 journal itself, moved, so it keeps the permissions that file had.
+Only live sends write state. Dry runs, test sends, `mailroll status` and the menu read it, to apply the resend policy and show it, but never change it. mailroll creates the `.state/` folder the first time it needs it. Each file is created with permissions `0600` (read and write for your user only).
 
 ### Format versions
 
-This page describes the **v2** history format of mailroll 0.2. mailroll 0.2 still reads the **v1** format of mailroll 0.1, and upgrades a list to v2 the first time a live run writes to it. The upgrade is one-way: mailroll 0.1 refuses a v2 history.
+This page describes the history format mailroll reads and writes, internally "version 2" (the `version` field of the snapshot and the header of the journal). mailroll refuses a snapshot or journal of any other format and changes nothing; see [Damaged or incompatible state](#damaged-or-incompatible-state).
 
 ### Snapshot
 
@@ -149,12 +147,12 @@ This page describes the **v2** history format of mailroll 0.2. mailroll 0.2 stil
 
 The evidence fields are optional. They are written only when mailroll actually has the information, and they help you trace a message with your provider. None of them proves delivery.
 
-- `attemptId` identifies the send intent that produced the entry: one intent per recipient and run, kept the same across the retries of that intent. Entries written by mailroll 0.1, and sends through email providers that do not receive attempt ids, have none.
+- `attemptId` identifies the send intent that produced the entry: one intent per recipient and run, kept the same across the retries of that intent. Sends through email providers that do not receive attempt ids have none.
 - `providerMessageId`, on sent entries, is the identifier the integration returned for the accepted message, unchanged. Integrations that return none (the Outlook integration among them) leave it out.
 - `cc`, on sent entries, appears only when the integration reports each recipient separately and the message had a CC. `rejected` lists the CC addresses the provider refused, and `required` says whether the template's `ccPolicy` was `required` **when the message was sent**, so changing the template later does not change it. A missing `cc` means the CC was not observed, never that every CC was accepted.
 - `uncertainAttemptIds` lists the attempt ids of earlier intents for this recipient that ended uncertain and are no longer shown elsewhere in the entry, in the order they happened. They stay even when a later deliberate resend succeeds, because each of them may have been delivered.
 
-A v2 snapshot with a field mailroll does not know is refused (`invalid state file at <path>: …`), so nothing is silently dropped.
+A snapshot with a field mailroll does not know is refused (`invalid state file at <path>: …`), so nothing is silently dropped.
 
 ### Journal
 
@@ -210,49 +208,12 @@ mailroll creates a lock by writing it to a temporary file and hard-linking it in
 A live run touches the state files in this order:
 
 1. While the run is prepared, mailroll loads the state of every selected list, then takes the lock of every list before the first message is sent.
-2. The first write to a list prepares its files: it upgrades a v1 history (see below) or, for a new list, writes an empty v2 snapshot first, and then starts the journal with its header.
+2. The first write to a list prepares its files: for a new list it writes an empty snapshot first, and then it starts the journal with its header.
 3. For each message, it appends an intent line, sends, and appends the outcome line.
 4. When a list finishes or stops, mailroll writes a new snapshot to a temporary file, renames it over `<stem>.json`, and deletes the journal. If any intent is still open, for example after a history write failed, it keeps the journal instead and logs `state.journal_kept` with the reason `an intent is still open`, so the open intent is not lost. If the snapshot itself cannot be written after the list already stopped on an error, it logs `state.flush_failed` and reports the first error; otherwise the run fails with `could not record send state snapshot; …`. Either way the journal stays, and the next run replays it.
 5. When the run ends, successfully or not, it deletes its locks. A failure to delete one is logged as `state.lock_release_failed` and does not change the run's result.
 
 Every history file mailroll writes is flushed to disk, and so is the folder after a history file is created, renamed or removed. The lock file's content is flushed, and so is its folder when the lock is created; the folder is not flushed when the lock is deleted. On Windows the folder flush is skipped when Windows refuses it; see [Platforms and limits](#platforms-and-limits).
-
-### Upgrade from the v1 format
-
-A list written by mailroll 0.1 is upgraded at the first write of a live run of mailroll 0.2, while that run holds the list's lock:
-
-1. mailroll checks that the v1 snapshot and journal hold only v1 data. If not, it stops without changing anything.
-2. It copies the v1 snapshot, byte for byte, to `<stem>.json.v1-backup`.
-3. It writes a v2 snapshot that contains the v1 snapshot with the v1 journal replayed over it. From this point on, mailroll 0.1 refuses the history with `invalid state file`, so it can never write over v2 data.
-4. It moves the v1 journal, unchanged, to `<stem>.jsonl.v1-backup`. An empty v1 journal is deleted instead.
-5. It starts the v2 journal with its header.
-
-The upgrade adds no evidence the v1 files did not have: v1 entries keep no `attemptId`, `providerMessageId`, `cc` or `uncertainAttemptIds`.
-
-A backup is never overwritten. If one already exists with the same content, from an upgrade that was interrupted, it is reused. If it exists with other content, the run stops with `… already exists with other content …`. Because the upgrade happens at the first write, this refusal and the one in step 1 reach you inside a history-write error, not on their own; see [Damaged or incompatible state](#damaged-or-incompatible-state).
-
-If the process stops in the middle of the upgrade, the files remain readable with the same history, and the next live run finishes the upgrade. The tests check this by making each write, rename, removal and flush fail in turn, inside the process, for an upgrade started by a send. An upgrade started by a live run with nothing to send, which only writes the snapshot, is not part of those checks.
-
-The live run's summary reports `history upgraded to v2` only after it has found the v2 snapshot and the backups on disk. In JSON, the list's `history` is `{"before": "v1", "upgraded": true, "backups": [...]}`, and the log has a `state.history_upgraded` event. A dry run or test send of a v1 list says `history is in the v1 format; the next live run upgrades it to v2 (one-way)`.
-
-### Restoring the v1 files
-
-Only restore the v1 files if you must go back to mailroll 0.1, **and only if mailroll 0.2 never attempted a send to that list**. Restoring forgets everything 0.2 recorded, so a message it sent, or one whose outcome is uncertain, would be sent again by the next `pending` run of mailroll 0.1.
-
-The files cannot prove this on their own. A list that finished has no journal, because mailroll deletes it when it writes the snapshot, and a resend changes a recipient's status without adding a recipient. Restore only if both of these are true:
-
-- `<stem>.jsonl` is absent or holds only its header line.
-- You have the summary of every live run of mailroll 0.2 on that list, the one that upgraded it included, and each one reports `sent 0, failed 0, uncertain 0` for the list. No run on the list was interrupted before it printed its summary.
-
-If you cannot confirm both, do not restore.
-
-With no run active on the list:
-
-1. Rename `<stem>.json` to a name of your choice, for example `<stem>.json.v2-abandoned`. Keep it.
-2. If `<stem>.jsonl` holds only its header line, remove it.
-3. Rename `<stem>.json.v1-backup` to `<stem>.json` if it exists, and `<stem>.jsonl.v1-backup` to `<stem>.jsonl` if it exists. A list that had only a v1 journal has no snapshot backup.
-
-mailroll never does this by itself.
 
 ### Damaged or incompatible state
 
@@ -261,17 +222,18 @@ mailroll never does this by itself.
 | Last journal line cut off by a crash | Ignores it; removes it before the next append |
 | Last journal line complete but without its newline | Reads it; adds the newline before the next append |
 | Any other journal line unreadable | Stops: `corrupt state journal at <path> (line N)` |
-| Last line of a v2 journal complete but unreadable | Stops: `corrupt state journal at <path> (line N)`, and never writes after it |
+| Last line of the journal complete but unreadable | Stops: `corrupt state journal at <path> (line N)`, and never writes after it |
 | Snapshot is not valid JSON | Stops: `corrupt state file at <path>` |
-| Snapshot has the wrong shape, or a v2 snapshot has an unknown field | Stops: `invalid state file at <path>: …` |
+| Snapshot has the wrong shape or an unknown field | Stops: `invalid state file at <path>: …` |
+| Snapshot with `version` 1, 0 or no `version` | Stops: `invalid state file at <path>: version: …` |
+| Snapshot that is not a JSON object | Stops: `invalid state file at <path>: (root): …` |
 | Snapshot or journal from a newer mailroll | Stops: `… written by a newer mailroll; upgrade mailroll to use this history` |
-| v2 journal next to a v1 snapshot, or with no snapshot | Stops: `… mixes a v2 journal with … snapshot …` |
-| v1 file with data mailroll cannot keep, at upgrade | Stops at the first write without changing anything: `cannot upgrade the state file at <path>: …` or `cannot upgrade the state journal at <path>: line N …`; the list can still be read |
-| Backup exists with other content, at upgrade | Stops at the first write without changing anything: `cannot upgrade the send history: <path>.v1-backup already exists with other content …` |
+| Journal that does not start with its header line, including an empty or whitespace-only journal | Stops without changing anything: `corrupt state journal at <path>: it does not start with the mailroll journal header; nothing was changed, check the file before running again` |
+| Journal with no snapshot | Stops without changing anything: `the send history at <path> has a journal but no snapshot; nothing was changed, restore the matching files before running again` |
 | Journal disappeared during a live run | Stops at the next history line: `the state journal at <path> disappeared during the run; nothing was written, and the run stops so no send goes unrecorded` |
 | Journal created by something else during a live run, before the run's first line | Stops at that line: `the state journal at <path> appeared before this run wrote to it, so something else created it: another program while this run held the list's lock, or another run that took the lock after this run lost it; nothing was written` |
 
-The `corrupt`, `invalid`, newer-mailroll and mixed-format stops are found when the list is read. A run reads every list before it signs in or sends, and `runTemplate` reads its list before it starts, so these messages arrive on their own, as `ConfigError`. The last four rows happen when the run writes. A direct `append` or `compact` call on a `FileStateStore` throws them as `ConfigError`. During a run, from the CLI, `runSelection` or `runTemplate`, they arrive as the cause of a `StatePersistenceError`, after the stage of the write that was refused: for example `could not record send state before sending to <address>; …: ConfigError: cannot upgrade the state file at <path>: …`, or `could not record send state snapshot; …: ConfigError: …` for a list with nothing left to send. One of the read stops arrives in this form too if the file changed after the list was read and before the run's first write to it. See [Could not record send state](/troubleshooting#could-not-record-send-state).
+The `corrupt`, `invalid`, newer-mailroll and missing-snapshot stops are found when the list is read. A run reads every list before it signs in or sends, and `runTemplate` reads its list before it starts, so these messages arrive on their own, as `ConfigError`. The last two rows happen when the run writes. A direct `append` or `compact` call on a `FileStateStore` throws them as `ConfigError`. During a run, from the CLI, `runSelection` or `runTemplate`, they arrive as the cause of a `StatePersistenceError`, after the stage of the write that was refused: for example `could not record send state before sending to <address>; …: ConfigError: the state journal at <path> disappeared during the run; …`, or `could not record send state snapshot; …: ConfigError: …` for a list with nothing left to send. One of the read stops arrives in this form too if the file changed after the list was read and before the run's first write to it. See [Could not record send state](/troubleshooting#could-not-record-send-state).
 
 A cut-off last line is what a crash during a write leaves behind, so it is safe to drop. Anything else needs you to restore the file from a backup or fix it by hand. Until then, sends of that list stop on it, and `mailroll status` reports it as a problem of the template.
 
@@ -284,12 +246,11 @@ A cut-off last line is what a crash during a write leaves behind, so it is safe 
 | `<stem>.json.lock.stale-<id>` | When no lock recovery is active | Nothing; a lock that was being recovered or released, or the lock of a run that has already lost it and stops at its next check |
 | `<stem>.jsonl` | No | Outcomes since the last snapshot |
 | `<stem>.json` | Only to forget the list's history | Every recorded status |
-| `<stem>.json.v1-backup`, `<stem>.jsonl.v1-backup` | When you will never need to go back to mailroll 0.1 | The way back to 0.1; the current history is not affected |
 | `*.tmp` next to them | When no run is active | Nothing; never read |
 
 A crash or kill can leave files behind:
 
-- A `.tmp` file, if the process ended while writing one of these files. Its name is the name of the file being written, followed by a random id: `<stem>.json.<id>.tmp` for a snapshot, `<stem>.jsonl.<id>.tmp` for a new journal, `<stem>.json.v1-backup.<id>.tmp` for the backup of a v1 snapshot, `<stem>.json.lock.<id>.tmp` for a lock, and `<stem>.json.lock.recover.<id>.tmp` for a recovery marker. mailroll never reads it.
+- A `.tmp` file, if the process ended while writing one of these files. Its name is the name of the file being written, followed by a random id: `<stem>.json.<id>.tmp` for a snapshot, `<stem>.jsonl.<id>.tmp` for a new journal, `<stem>.json.lock.<id>.tmp` for a lock, and `<stem>.json.lock.recover.<id>.tmp` for a recovery marker. mailroll never reads it.
 - `<stem>.json.lock.stale-<id>`, if the process ended in the middle of a recovery or of a release, if the moved lock could not be removed, or if the moved lock turned out to belong to another run; the error then names it. mailroll never reads it.
 - `<stem>.json.lock.recover`, from the same cause. The next live run stops with `… cannot be recovered: an earlier recovery of <path> did not finish and left <path>.recover (…)`, which tells you to check that no run and no recovery is active and then delete the marker. See [Locks](/guides/history#locks).
 
@@ -303,7 +264,7 @@ Delete a lock by hand only after making sure the run that owns it has ended, for
 
 These limits are known and not yet solved:
 
-- **Hard links are required.** Locks, backups and new journals are created with hard links, so they never overwrite an existing file, and there is no fallback without them. On file systems without hard links, such as FAT or exFAT drives and some network or synchronized folders, every live run stops before sending anything when it takes the first lock, with `could not create …/.state/<stem>.json.lock; nothing was left behind`. The reason from the file system is in the error's `cause`. Dry runs, test sends and `status` are not affected.
+- **Hard links are required.** Locks and new journals are created with hard links, so they never overwrite an existing file, and there is no fallback without them. On file systems without hard links, such as FAT or exFAT drives and some network or synchronized folders, every live run stops before sending anything when it takes the first lock, with `could not create …/.state/<stem>.json.lock; nothing was left behind`. The reason from the file system is in the error's `cause`. Dry runs, test sends and `status` are not affected.
 - **Windows and macOS are not verified yet.** The test suite includes real file-system checks for both, but they have not run there. Windows does not let Node.js flush a folder to disk, so on Windows mailroll skips that step when the flush is refused with `EPERM`; any other error still stops the write. The creation, renaming or removal of a state file is then not flushed explicitly: a journaling file system such as NTFS keeps the folder consistent after a crash, but the latest such change may be lost on power failure, and on a network share it depends on the server.
 - **Durability depends on the file system and the operating system.** mailroll flushes files, and folders everywhere except Windows. On macOS, Node.js asks for a full flush (`F_FULLFSYNC`), which also empties the disk's own write cache; where the file system does not support it, as on some network or mounted volumes, Node.js falls back to a weaker flush that only orders writes, and mailroll cannot tell which one took place. Power loss is not simulated in the tests, and the process is not killed: the tests make each file operation fail in turn instead.
 - **Process spaces.** Automatic lock recovery trusts the process space to tell apart processes that share a host name.

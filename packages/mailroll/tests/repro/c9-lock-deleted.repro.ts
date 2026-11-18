@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import type * as FsPromises from 'node:fs/promises';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { emptyState, parseEmailAddress, type SendOutcome, upgradeTemplateState } from '@mailroll/core';
+import { emptyState, parseEmailAddress, type SendOutcome } from '@mailroll/core';
 import { FileStateStore } from '../../src/platform/state/file-state-store';
 import { serializeSnapshot } from '../../src/platform/state/history-format';
 import { Checkpoints } from '../support/concurrency/barrier';
@@ -102,7 +102,7 @@ describe('C9 — the lock file of a live run is deleted while it sends', () => {
 
     const resultA = await a;
     const lockAfterA = readOptional(lockPath);
-    const history = upgradeTemplateState(await new FileStateStore().load(listAt(statePath, CLI_EMAILS).template));
+    const history = await new FileStateStore().load(listAt(statePath, CLI_EMAILS).template);
     const after = await runLiveCli({ campaigns, cwd: dir, ledger, run: 'after' });
     const summary = ledger.summary();
 
@@ -348,9 +348,8 @@ describe('C9 — the lock file of a live run is deleted while it sends', () => {
     interleaver.release(beforeOutcome);
 
     const outcomeA = await a;
-    const graceBeforeTheNextRun = upgradeTemplateState(await new FileStateStore().load(list.template)).recipients[
-      'grace@example.com'
-    ]?.status;
+    const graceBeforeTheNextRun = (await new FileStateStore().load(list.template)).recipients['grace@example.com']
+      ?.status;
 
     await runLocked({
       list,

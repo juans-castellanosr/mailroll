@@ -68,7 +68,6 @@ acme/onboarding — Acme onboarding
 ```
 
 - Each list line has `in list`, `sent`, `failed` and `pending`. `uncertain N`, `N row(s) rejected` and `CC rejected M (R required)` are added only when they are not zero.
-- A list whose history is still in the format of mailroll 0.1 gets the line `history is in the v1 format; the next live run upgrades it to v2 (one-way)`.
 - Each entry of `evidence` (see below) gets its own line, such as `ada@example.com: sent · CC rejected (required): records@example.com · attempt … · provider id … (for tracing; not proof of delivery)`.
 - A template that cannot be read gets one `unavailable` line with the reason, instead of its lists. The reason is `no CSV in data/` or the error message, such as a plugin or CSV error.
 
@@ -99,7 +98,6 @@ With `--json`, `status` prints an array with one object per campaign. With no ca
               "ccRejectedMessages": 0,
               "requiredCcRejectedMessages": 0
             },
-            "history": "none",
             "evidence": []
           }
         ]
@@ -126,9 +124,8 @@ With `--json`, `status` prints an array with one object per campaign. With no ca
   One entry per template folder.
 
   - `templateId`: the template's folder name.
-  - `lists`: one entry per CSV file, each with `dataFile`, `counts`, `history` and `evidence`. Empty when the template has a problem.
+  - `lists`: one entry per CSV file, each with `dataFile`, `counts` and `evidence`. Empty when the template has a problem.
   - `counts`: `total`, `sent`, `failed`, `uncertain`, `pending`, `rejected`, `ccRejectedMessages` and `requiredCcRejectedMessages`, as described in [What the counts mean](#what-the-counts-mean).
-  - `history`: `"none"` (no history yet), `"v1"` (written by mailroll 0.1, upgraded by the next live run) or `"v2"`. In code, it is absent when `getCampaignStatus` is given its own `store`, because mailroll then cannot know how that store keeps its history.
   - `evidence`: the history entries that need tracing: uncertain recipients, sent recipients with a rejected CC, entries with earlier uncertain attempts (`uncertainAttemptIds`), and sent recipients whose later resend is uncertain (`uncertainResend`). Each has `email`, `status` and `at`, plus `attemptId`, `providerMessageId`, `uncertainAttemptIds`, `cc` and `uncertainResend` when known. Evidence is for tracing; it never proves delivery, and `status` never changes the history or puts anyone back in the queue.
   - `problem`: present only when the template cannot be read. It holds `no CSV in data/` or the error message.
 </ResponseField>

@@ -12,7 +12,6 @@ import {
   INTERRUPTED_MESSAGE,
   type RecipientJournalEntry,
   type TemplateState,
-  upgradeTemplateState,
 } from '../../src/domain/run/template-state';
 import { foldJournal } from '../../src/domain/run/fold-journal';
 import type { DataSource } from '../../src/ports/data-source';
@@ -137,8 +136,7 @@ function run(options: RunOptions): Promise<RunReport> {
   });
 }
 
-const recordOf = async (store: RecordingStore, email = 'a@x.co') =>
-  upgradeTemplateState(await store.load(template())).recipients[email];
+const recordOf = async (store: RecordingStore, email = 'a@x.co') => (await store.load(template())).recipients[email];
 
 describe('attempt ids in the history', () => {
   it('records one attempt id on the intent and on the outcome, stable across the physical calls', async () => {
@@ -499,7 +497,7 @@ describe('the compacted history date (K3)', () => {
     await run({ store, sender: prepared, now: () => 'FIRST' });
     await run({ store, sender: prepared, ids: ['B'], now: () => 'LATER' });
 
-    expect(upgradeTemplateState(await store.load(template())).updatedAt).toBe('FIRST');
+    expect((await store.load(template())).updatedAt).toBe('FIRST');
   });
 });
 

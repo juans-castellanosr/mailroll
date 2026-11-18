@@ -88,11 +88,11 @@ The first live run of mailroll 0.2 that writes to a list upgrades its history fr
 
 - The old snapshot is copied to `<stem>.json.v1-backup` and the old journal is moved, unchanged, to `<stem>.jsonl.v1-backup`. Neither is ever overwritten.
 - Every recorded status keeps its meaning. The upgrade adds no evidence the old files did not have.
-- **It is one-way.** After it, mailroll 0.1 refuses the list with `invalid state file`, so it can never write over v2 history. Going back is only safe while nothing has been sent with 0.2; see [Restoring the v1 files](/reference/files#restoring-the-v1-files).
+- **It is one-way.** After it, mailroll 0.1 refuses the list with `invalid state file`, so it can never write over v2 history.
 - Dry runs, test sends, `status` and the menu read v1 histories without upgrading them. Dry runs, test sends and `status` say that the next live run will upgrade the list.
 - If the upgrade is interrupted, the next live run finishes it.
 
-Details are in [Upgrade from the v1 format](/reference/files#upgrade-from-the-v1-format). Read [Platforms and limits](/reference/files#platforms-and-limits) before you upgrade: the new format needs a file system with hard links, and Windows and macOS have not been verified yet.
+Read [Platforms and limits](/reference/files#platforms-and-limits) before you upgrade: the new format needs a file system with hard links, and Windows and macOS have not been verified yet.
 
 ## Behavior that changed
 
@@ -112,17 +112,16 @@ Code that only reads results and calls `needsAttention` keeps compiling. Code th
 
 | Change | Runtime | Types | Saved history |
 | --- | --- | --- | --- |
-| `TemplateState` is `version: 2`; `StateStore.load` returns `StoredTemplateState` | Your store may keep returning v1 data | **Breaks** stores that return `version: 1` as `TemplateState`, and code that assigns `load()` to `TemplateState` | Unchanged for your store; `FileStateStore` writes v2 |
+| `TemplateState` is `version: 2`, and `StateStore.load` returns it | — | **Breaks** stores that return `version: 1` | `FileStateStore` reads and writes only v2 |
 | `compact` receives a v2 state | A store that checks `version === 1` there never sees it | **Breaks** the comparison | Your store saves v2 from now on |
 | `RunReport` gained `ccRejectedMessages`, `requiredCcRejectedMessages` | Always present | **Breaks** hand-built reports | — |
-| `TemplateRunResult` gained `history` | Always present | **Breaks** hand-built results | — |
-| `ListCounts` gained the two CC counts; `ListReport` gained `evidence` (and `history` when known) | Always present | **Breaks** hand-built counts and reports | — |
+| `ListCounts` gained the two CC counts; `ListReport` gained `evidence` | Always present | **Breaks** hand-built counts and reports | — |
 | `emptyState()` returns `version: 2` | Changes stored data of stores that save it | Compiles | — |
 | New optional fields on `RecipientStatus`, `ResendFailure`, `RecipientJournalEntry` and `SendResult` | — | Compile | Written by `FileStateStore` |
 
-New exports: `CcObservation`, `StoredTemplateState`, `TemplateStateV1`, `foldJournal` and `upgradeTemplateState` in `@mailroll/core` (and `mailroll`), and the types `RunHistory` and `HistoryPresence` in `mailroll`. Nothing was removed.
+New exports: `CcObservation` and `foldJournal` in `@mailroll/core` (and `mailroll`). Nothing was removed.
 
-A store that implements `StateStore`. `load` may keep returning what you saved before 0.2, and `compact` saves v2:
+A store that implements `StateStore`. `load` returns a `TemplateState`, and `compact` receives one:
 
 ```ts
 import {
@@ -131,14 +130,13 @@ import {
   type ResolvedTemplate,
   type StateLock,
   type StateStore,
-  type StoredTemplateState,
   type TemplateState,
 } from 'mailroll';
 
-const saved = new Map<string, StoredTemplateState>();
+const saved = new Map<string, TemplateState>();
 
 export const store: StateStore = {
-  load: (template: ResolvedTemplate): Promise<StoredTemplateState> =>
+  load: (template: ResolvedTemplate): Promise<TemplateState> =>
     Promise.resolve(saved.get(template.statePath) ?? emptyState(template.id)),
   append: (_template: ResolvedTemplate, _entry: RecipientJournalEntry): Promise<void> => Promise.resolve(),
   compact: (template: ResolvedTemplate, state: TemplateState): Promise<void> => {
@@ -148,24 +146,6 @@ export const store: StateStore = {
   },
   lock: (): Promise<StateLock> => Promise.resolve({ release: () => Promise.resolve() }),
 };
-```
-
-Reading a store's history as a `TemplateState`:
-
-```ts
-import { type ResolvedTemplate, type StateStore, type TemplateState, upgradeTemplateState } from 'mailroll';
-
-export async function currentState(store: StateStore, template: ResolvedTemplate): Promise<TemplateState> {
-  return upgradeTemplateState(await store.load(template));
-}
-```
-
-Telling data saved before 0.2 apart, on what `load` returned rather than inside `compact`:
-
-```ts
-import type { StoredTemplateState } from 'mailroll';
-
-export const savedBefore02 = (stored: StoredTemplateState): boolean => stored.version === 1;
 ```
 
 Building a `RunReport`, for example in a test. `report()` computes every count:
@@ -191,9 +171,7 @@ export const handmade: RunReport = {
 Building a `TemplateRunResult`:
 
 ```ts
-import { report, type RunHistory, type TemplateRunResult } from 'mailroll';
-
-const history: RunHistory = { before: 'v2', upgraded: false };
+import { report, type TemplateRunResult } from 'mailroll';
 
 export const result: TemplateRunResult = {
   templateId: 'welcome',
@@ -201,7 +179,6 @@ export const result: TemplateRunResult = {
   policy: 'pending',
   statePath: 'campaigns/acme/onboarding/templates/welcome/.state/recipients.json',
   report: report([]),
-  history,
 };
 ```
 

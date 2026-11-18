@@ -35,12 +35,6 @@ export async function statusCommand(
       for (const list of template.lists) {
         ctx.out.data(`  ${template.templateId} · ${list.dataFile}: ${formatCounts(list.counts)}`);
 
-        if (list.history === 'v1') {
-          ctx.out.data(
-            styled('muted', '    history is in the v1 format; the next live run upgrades it to v2 (one-way)'),
-          );
-        }
-
         for (const item of list.evidence) {
           ctx.out.data(`    ${describeEvidence(item)}`);
         }

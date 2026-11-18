@@ -82,7 +82,7 @@ describe('foldJournal', () => {
     });
   });
 
-  it('gives no attempt id to an interrupted v1 intent, which never had one', () => {
+  it('gives no attempt id to an interrupted intent recorded without one', () => {
     const state = foldJournal(emptyState('t'), [{ email: EMAIL, intent: { at: 'T1', connectionId: 'x' } }]);
 
     expect(state.recipients[EMAIL]).toEqual({

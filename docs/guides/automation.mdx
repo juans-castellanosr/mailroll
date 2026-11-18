@@ -77,8 +77,7 @@ npx mailroll send -c acme/onboarding -t welcome \
           "attemptId": "5c1f0e9d-8b7a-4c6d-9e5f-4a3b2c1d0e9f"
         }
       ],
-      "ccRejected": [],
-      "history": { "before": "v2", "upgraded": false }
+      "ccRejected": []
     }
   ]
 }
@@ -114,16 +113,6 @@ npx mailroll send -c acme/onboarding -t welcome \
 
 <ResponseField name="lists[].ccRejected" type="array" required>
   One entry per message whose CC the provider rejected, required or optional: `address` (the main recipient), `cc` (the rejected CC addresses), `required` (the template's `ccPolicy` when the message was sent), and `attemptId` and `providerMessageId` when known. Empty when no CC was rejected.
-</ResponseField>
-
-<ResponseField name="lists[].history" type="object" required>
-  The format of the list's history and whether this run upgraded it:
-
-  - `before` is `"none"` (no history yet), `"v1"` (written by mailroll 0.1) or `"v2"`, read when the list started.
-  - `upgraded` is `true` only when a live run upgraded a v1 history and found the v2 snapshot and the backups on disk. Then `backups` lists the backup files.
-  - `unconfirmed: true` appears when a live run of a v1 list could not confirm the upgrade. Check the list's state files before using an older mailroll.
-
-  See [Upgrade from the v1 format](/reference/files#upgrade-from-the-v1-format).
 </ResponseField>
 
 <ResponseField name="lists[].previewDir" type="string">

@@ -3,12 +3,11 @@ import { type FileHandle, open } from 'node:fs/promises';
 import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { type RecipientJournalEntry, upgradeTemplateState } from '@mailroll/core';
+import { type RecipientJournalEntry } from '@mailroll/core';
 import { errorCode } from '../../../src/platform/fs/error-code';
 import {
   appendDurably,
   createFile,
-  moveFile,
   replaceFile,
   syncDirectory,
   truncateDurably,
@@ -19,7 +18,7 @@ import { ChildRun, stopAllChildren } from '../../support/concurrency/child-proce
 import { expectPrivateFile } from '../../support/private-file';
 import { asWriter } from '../../support/write-access';
 import { JOURNAL_HEADER_LINE } from '../../../src/platform/state/history-format';
-import { fixture, listTemplate, stageList } from '../../support/state-v1-fixtures';
+import { listTemplate, stageList } from '../../support/staged-list';
 import { localPidSpace } from '../../support/local-pid-space';
 
 let root: string;
@@ -84,28 +83,13 @@ describe(`durable history operations on ${process.platform}`, () => {
   });
 
   it('creates a file without ever overwriting one (hard link)', async () => {
-    const path = join(mkdtempSync(join(root, 'create-')), 'list.json.v1-backup');
+    const path = join(mkdtempSync(join(root, 'create-')), 'list.jsonl');
 
     expect(await onThisPlatform('exclusive create', () => createFile(path, 'original'))).toBe('created');
     expect(await onThisPlatform('exclusive create over an existing file', () => createFile(path, 'other'))).toBe(
       'exists',
     );
     expect(readFileSync(path, 'utf8')).toBe('original');
-  });
-
-  it('moves a file without ever overwriting the target (hard link, then remove)', async () => {
-    const dir = mkdtempSync(join(root, 'move-'));
-
-    writeFileSync(join(dir, 'a'), 'a');
-    writeFileSync(join(dir, 'b'), 'b');
-    writeFileSync(join(dir, 'c'), 'c');
-
-    expect(await onThisPlatform('no-clobber move', () => moveFile(join(dir, 'a'), join(dir, 'moved')))).toBe('created');
-    expect(
-      await onThisPlatform('no-clobber move onto an existing file', () => moveFile(join(dir, 'b'), join(dir, 'c'))),
-    ).toBe('exists');
-    expect(readFileSync(join(dir, 'moved'), 'utf8')).toBe('a');
-    expect(readFileSync(join(dir, 'c'), 'utf8')).toBe('c');
   });
 
   it('appends to and truncates an existing file durably, and never creates a missing one', async () => {
@@ -215,26 +199,6 @@ describe(`durable history operations on ${process.platform}`, () => {
     expectPrivateFile(`${statePath}l`);
   });
 
-  it('upgrades a v1 history with its backups', async () => {
-    const files = { snapshot: fixture('snapshot.json'), journal: fixture('journal-mixed.jsonl') };
-    const list = stageList(root, files);
-    const expected = upgradeTemplateState(await new FileStateStore().load(list.template));
-    const store = new FileStateStore();
-    const lock = await store.lock(list.template);
-
-    await store.load(list.template);
-
-    try {
-      await onThisPlatform('v1 → v2 upgrade', () => store.append(list.template, MARK));
-    } finally {
-      await lock.release();
-    }
-
-    expect(await new FileStateStore().load(list.template)).toEqual(expected);
-    expect(readFileSync(`${list.snapshotPath}.v1-backup`, 'utf8')).toBe(files.snapshot);
-    expect(readFileSync(`${list.journalPath}.v1-backup`, 'utf8')).toBe(files.journal);
-  });
-
   it('repairs a torn journal with text outside ASCII without losing a complete line', async () => {
     const complete = `${JOURNAL_HEADER_LINE}\n{"email":"josé@x.co","status":{"status":"sent","at":"T1","connectionId":"x","attemptId":"Á"}}\n`;
     const list = stageList(root, {
@@ -251,25 +215,20 @@ describe(`durable history operations on ${process.platform}`, () => {
     expect(readFileSync(list.journalPath, 'utf8')).toBe(`${complete}${JSON.stringify(MARK)}\n`);
   });
 
-  it('finishes an upgrade left half-done (v2 snapshot next to the v1 journal)', async () => {
-    const files = { snapshot: fixture('snapshot.json'), journal: fixture('journal-mixed.jsonl') };
-    const list = stageList(root, files);
-    const expected = upgradeTemplateState(await new FileStateStore().load(list.template));
-
-    writeFileSync(list.snapshotPath, `${JSON.stringify(expected, null, 2)}\n`);
-
+  it('adds the missing final newline of a journal on the first write', async () => {
+    const complete = `${JOURNAL_HEADER_LINE}\n{"email":"josé@x.co","status":{"status":"sent","at":"T1","connectionId":"x","attemptId":"Á"}}`;
+    const list = stageList(root, {
+      snapshot: `${JSON.stringify({ version: 2, templateId: 'welcome', recipients: {}, updatedAt: 'T0' })}\n`,
+      journal: complete,
+    });
+    const expected = await new FileStateStore().load(list.template);
     const store = new FileStateStore();
-    const lock = await store.lock(list.template);
 
-    await store.load(list.template);
+    await onThisPlatform('newline repair', () =>
+      asWriter(store, list.template, () => store.append(list.template, MARK)),
+    );
 
-    try {
-      await onThisPlatform('recovery after an interrupted upgrade', () => store.append(list.template, MARK));
-    } finally {
-      await lock.release();
-    }
-
+    expect(readFileSync(list.journalPath, 'utf8')).toBe(`${complete}\n${JSON.stringify(MARK)}\n`);
     expect(await new FileStateStore().load(list.template)).toEqual(expected);
-    expect(readFileSync(`${list.journalPath}.v1-backup`, 'utf8')).toBe(files.journal);
   });
 });

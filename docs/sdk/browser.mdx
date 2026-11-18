@@ -171,7 +171,7 @@ export function describePlan(
 ```
 
 - `state` is the history of one list, a v2 `TemplateState`. For a list that was never sent, use `emptyState(templateId)`, which returns an empty v2 state. Otherwise your server has to provide it; the browser cannot read the `.state/` folder.
-- A list's snapshot file alone can lag behind its journal after an interrupted run. If your server sends you state, it should load it with `FileStateStore`, which combines both, and pass the result through `upgradeTemplateState`: a history written by mailroll 0.1 is loaded in the v1 format until a live run upgrades it. `upgradeTemplateState` copies it as it is and adds no evidence. See [State files](/reference/files#state-files).
+- A list's snapshot file alone can lag behind its journal after an interrupted run. If your server sends you state, it should load it with `FileStateStore`, which combines both. See [State files](/reference/files#state-files).
 - `heldUncertain` counts recipients held back because an earlier send is uncertain. They need a human decision; see [Uncertain sends](/guides/history#uncertain-sends).
 
 ## Limits

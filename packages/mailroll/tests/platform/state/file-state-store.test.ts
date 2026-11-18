@@ -8,7 +8,6 @@ import {
   type RecipientJournalEntry,
   type ResolvedTemplate,
   type TemplateState,
-  upgradeTemplateState,
 } from '@mailroll/core';
 import { FileStateStore } from '../../../src/platform/state/file-state-store';
 import { localPidSpace } from '../../support/local-pid-space';
@@ -68,6 +67,7 @@ describe('FileStateStore', () => {
 
     await asWriter(store, t, () => store.compact(t, state));
     expectPrivateFile(t.statePath);
+    expect(readFileSync(t.statePath, 'utf8')).toBe(`${JSON.stringify(state, null, 2)}\n`);
     expect(await store.load(t)).toEqual(state);
   });
 
@@ -114,7 +114,7 @@ describe('FileStateStore', () => {
 
     await asWriter(store, t, async () => {
       await store.append(t, sent('a@x.co'));
-      await store.compact(t, upgradeTemplateState(await store.load(t)));
+      await store.compact(t, await store.load(t));
     });
     expect(existsSync(journalOf(t))).toBe(false);
     expect(Object.keys((await store.load(t)).recipients)).toEqual(['a@x.co']);

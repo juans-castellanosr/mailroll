@@ -1,5 +1,5 @@
 import { needsAttention, type SendResult, type SendSelection } from '@mailroll/core';
-import type { ListRef, RunHistory, TemplateRunResult } from '../composition/build-runner';
+import type { ListRef, TemplateRunResult } from '../composition/build-runner';
 import { type Output, styled } from './output';
 
 export interface AttentionItem {
@@ -46,7 +46,6 @@ export interface RunSummaryJson {
     };
     readonly attention: readonly AttentionItem[];
     readonly ccRejected: readonly RejectedCcItem[];
-    readonly history: RunHistory;
   }[];
 }
 
@@ -138,7 +137,7 @@ export function summaryJson(
     mode: selection.mode.kind,
     needsAttention: interruption !== undefined || results.some((r) => needsAttention(r.report)),
     ...(interruption !== undefined ? { interrupted: interruption } : {}),
-    lists: results.map(({ templateId, dataFile, policy, statePath, previewDir, report, history }) => ({
+    lists: results.map(({ templateId, dataFile, policy, statePath, previewDir, report }) => ({
       templateId,
       dataFile,
       policy,
@@ -156,7 +155,6 @@ export function summaryJson(
       },
       attention: attentionOf(report.results, selection.mode),
       ccRejected: rejectedCcItems(report.results),
-      history,
     })),
   };
 }
@@ -178,20 +176,6 @@ function evidenceLine(attemptId: string | undefined, providerMessageId?: string)
   return parts.length === 0 ? undefined : `      ${parts.join(' · ')} (for tracing; not proof of delivery)`;
 }
 
-function historyLine(mode: RunModeOf['kind'], history: RunHistory, statePath: string): string | undefined {
-  if (history.upgraded) {
-    return `    history upgraded to v2; backups: ${history.backups.join(', ')}; older mailroll versions can no longer read it`;
-  }
-
-  if (history.unconfirmed === true) {
-    return `    history upgrade could not be confirmed; check ${statePath} before using an older mailroll`;
-  }
-
-  return mode !== 'live' && history.before === 'v1'
-    ? '    history is in the v1 format; the next live run upgrades it to v2 (one-way)'
-    : undefined;
-}
-
 export function printSummary(
   out: Output,
   selection: SendSelection,
@@ -207,7 +191,7 @@ export function printSummary(
     ` — ${mode.kind}${mode.kind === 'test' ? ` (every message to ${mode.testRecipient})` : ''}`,
   );
 
-  for (const { templateId, dataFile, policy, statePath, previewDir, report, history } of results) {
+  for (const { templateId, dataFile, policy, statePath, previewDir, report } of results) {
     const ok = !needsAttention(report);
     const ccNote =
       report.ccRejectedMessages > 0
@@ -224,12 +208,6 @@ export function printSummary(
       out.data(styled('muted', `    previews: ${previewDir}`));
     } else if (mode.kind === 'live') {
       out.data(styled('muted', `    history: ${statePath}`));
-    }
-
-    const upgrade = historyLine(mode.kind, history, statePath);
-
-    if (upgrade !== undefined) {
-      out.data(styled('muted', upgrade));
     }
 
     for (const item of attentionOf(report.results, mode)) {

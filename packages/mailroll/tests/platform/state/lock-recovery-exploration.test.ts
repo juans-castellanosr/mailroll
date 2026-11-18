@@ -165,9 +165,9 @@ describe('every interleaving of lock acquisitions around a lock left by a dead p
     expect(schedules).toBeGreaterThan(100);
   });
 
-  it('never recovers a lock written by an earlier version, which does not record its process space', async () => {
+  it('never recovers a lock that does not record its process space', async () => {
     await exploreAcquisitions({
-      label: 'earlier-version-without-process-space',
+      label: 'without-process-space',
       actors: ['A', 'B'],
       maxSwitches: TWO_SWITCHES,
       setup: (lockPath) => {

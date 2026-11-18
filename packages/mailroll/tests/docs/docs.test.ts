@@ -186,11 +186,6 @@ describe('the documentation', () => {
         "'1'",
       ],
       [
-        'load() assigned to TemplateState',
-        "import type { ResolvedTemplate, StateStore, TemplateState } from 'mailroll';\nexport async function read(store: StateStore, template: ResolvedTemplate): Promise<TemplateState> {\n  const state: TemplateState = await store.load(template);\n  return state;\n}",
-        'TemplateState',
-      ],
-      [
         'a version === 1 check in compact',
         "import type { TemplateState } from 'mailroll';\nexport const old = (state: TemplateState): boolean => state.version === 1;",
         'no overlap',
@@ -199,11 +194,6 @@ describe('the documentation', () => {
         'a RunReport literal',
         "import type { RunReport } from 'mailroll';\nexport const built: RunReport = { total: 0, sent: 0, failed: 0, uncertain: 0, notAttempted: 0, skipped: 0, heldUncertain: 0, results: [] };",
         'ccRejectedMessages',
-      ],
-      [
-        'a TemplateRunResult literal',
-        "import { report, type TemplateRunResult } from 'mailroll';\nexport const built: TemplateRunResult = { templateId: 'welcome', dataFile: 'recipients.csv', policy: 'pending', statePath: 's', report: report([]) };",
-        'history',
       ],
       [
         'a ListCounts literal',

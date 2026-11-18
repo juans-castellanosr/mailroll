@@ -2,7 +2,6 @@ import { cpSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { upgradeTemplateState } from '@mailroll/core';
 import { FileStateStore } from '../../../src/platform/state/file-state-store';
 import { Checkpoints } from '../../support/concurrency/barrier';
 import { ChildRun, nextSendOrDone, pumpUntilDone, stopAllChildren } from '../../support/concurrency/child-process';
@@ -26,7 +25,7 @@ afterEach(async () => {
 });
 
 async function sentRecipients(list: ListFixture): Promise<readonly string[]> {
-  const state = upgradeTemplateState(await new FileStateStore().load(list.template));
+  const state = await new FileStateStore().load(list.template);
 
   return Object.entries(state.recipients)
     .filter(([, status]) => status.status === 'sent')

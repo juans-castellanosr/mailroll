@@ -14,16 +14,15 @@ import {
   StatePersistenceError,
   type StateStore,
   TemplateRunError,
-  upgradeTemplateState,
 } from '@mailroll/core';
 import { FileStateStore } from '../../../src/platform/state/file-state-store';
 import { Checkpoints, deferred } from '../../support/concurrency/barrier';
 import { FailingStore, type WriteFailure } from '../../support/concurrency/failing-store';
 import { type ListFixture, listAt, runLocked } from '../../support/concurrency/list-run';
 import { preparedLedgerSender, SendLedger } from '../../support/concurrency/send-ledger';
-import { fixture } from '../../support/state-v1-fixtures';
 
 const ADA = 'ada@example.com';
+const V1_SNAPSHOT = `${JSON.stringify({ version: 1, templateId: 'welcome', recipients: {}, updatedAt: 'T0' }, null, 2)}\n`;
 const GRACE = 'grace@example.com';
 
 let dir: string;
@@ -112,7 +111,7 @@ function journalOnDisk(): readonly string[] {
 }
 
 async function afterRestart(): Promise<Readonly<Record<string, RecipientStatus>>> {
-  return upgradeTemplateState(await new FileStateStore().load(list.template)).recipients;
+  return (await new FileStateStore().load(list.template)).recipients;
 }
 
 async function pendingAfterwards(): Promise<readonly string[]> {
@@ -352,23 +351,36 @@ describe('a history write that fails at each stage of a live send', () => {
     expect(await afterRestart()).toEqual({});
   });
 
-  it('v1 history that cannot be upgraded: the refusal at the first write reaches the caller as a StatePersistenceError, and nothing changes', async () => {
-    const v1Snapshot = fixture('snapshot-unknown-fields.json');
-
+  it('history in an unsupported format at load: the run is refused with a ConfigError before any write, and nothing changes', async () => {
     mkdirSync(dirname(list.template.statePath), { recursive: true });
-    writeFileSync(list.template.statePath, v1Snapshot);
+    writeFileSync(list.template.statePath, V1_SNAPSHOT);
 
     const { error, persistence } = await attempt(new FileStateStore());
+
+    expect(providerCalls()).toBe(0);
+    expect(persistence).toBeUndefined();
+    expect(error).toBeInstanceOf(ConfigError);
+    expect(error instanceof Error ? error.message : '').toContain(`invalid state file at ${list.template.statePath}: `);
+    expect(error instanceof Error ? error.message : '').toMatch(/version/);
+    expect(readFileSync(list.template.statePath, 'utf8')).toBe(V1_SNAPSHOT);
+    expect(journalOnDisk()).toEqual([]);
+  });
+
+  it('history in an unsupported format that appears after the load: the refusal at the first write reaches the caller as a StatePersistenceError, and nothing changes', async () => {
+    const plant = (): void => {
+      mkdirSync(dirname(list.template.statePath), { recursive: true });
+      writeFileSync(list.template.statePath, V1_SNAPSHOT);
+    };
+
+    const { error, persistence } = await attempt(new TamperedBefore(new FileStateStore(), 'intent', plant));
 
     expect(error).toBeInstanceOf(TemplateRunError);
     expect(providerCalls()).toBe(0);
     expect(persistence?.recipient).toBe(ADA);
     expect(persistence?.message).toMatch(/^could not record send state before sending to ada@example\.com; /);
-    expect(persistence?.message).toContain(
-      `ConfigError: cannot upgrade the state file at ${list.template.statePath}: it holds data that is not part of the v1 history format, so upgrading would drop it; nothing was changed, check the file before running again`,
-    );
+    expect(persistence?.message).toContain(`ConfigError: invalid state file at ${list.template.statePath}: `);
     expect(persistence?.cause).toBeInstanceOf(ConfigError);
-    expect(readFileSync(list.template.statePath, 'utf8')).toBe(v1Snapshot);
+    expect(readFileSync(list.template.statePath, 'utf8')).toBe(V1_SNAPSHOT);
     expect(journalOnDisk()).toEqual([]);
   });
 

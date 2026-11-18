@@ -19,7 +19,6 @@ import {
   type RecipientStatus,
   type TemplateState,
   settleStatus,
-  upgradeTemplateState,
 } from '../domain/run/template-state';
 import { connectionCapabilityProblem, messageCapabilityProblem } from './check-capabilities';
 import { collectRecipients } from './collect-recipients';
@@ -225,7 +224,7 @@ async function runReservedTemplate<T extends Recipient>(input: RunTemplateDeps<T
     logger.warn('source.empty', { campaignId: template.campaignId, templateId: template.id });
   }
 
-  const state = upgradeTemplateState(await deps.stateStore.load(template));
+  const state = await deps.stateStore.load(template);
   const plan = planRun({
     recipients: valid.map((v) => v.email),
     state,

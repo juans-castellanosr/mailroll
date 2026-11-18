@@ -106,29 +106,6 @@ export async function createFile(path: string, content: string | Buffer): Promis
   return 'created';
 }
 
-export async function moveFile(
-  from: string,
-  to: string,
-  beforeRemovingSource: Fence = unfenced,
-): Promise<CreateOutcome> {
-  try {
-    await link(from, to);
-  } catch (error) {
-    if (errorCode(error) === 'EEXIST') {
-      return 'exists';
-    }
-
-    throw error;
-  }
-
-  await syncDirectory(dirname(to));
-  await beforeRemovingSource();
-  await rm(from);
-  await syncDirectory(dirname(from));
-
-  return 'created';
-}
-
 export async function removeFile(path: string, beforeRemoving: Fence = unfenced): Promise<void> {
   await beforeRemoving();
   await rm(path, { force: true });

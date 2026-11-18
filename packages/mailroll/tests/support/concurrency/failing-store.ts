@@ -1,11 +1,4 @@
-import type {
-  RecipientJournalEntry,
-  ResolvedTemplate,
-  StateLock,
-  StateStore,
-  StoredTemplateState,
-  TemplateState,
-} from '@mailroll/core';
+import type { RecipientJournalEntry, ResolvedTemplate, StateLock, StateStore, TemplateState } from '@mailroll/core';
 
 export type EntryKind = 'intent' | 'status' | 'released';
 
@@ -36,7 +29,7 @@ export class FailingStore implements StateStore {
     this.pending = failure;
   }
 
-  load(template: ResolvedTemplate): Promise<StoredTemplateState> {
+  load(template: ResolvedTemplate): Promise<TemplateState> {
     return this.inner.load(template);
   }
 
