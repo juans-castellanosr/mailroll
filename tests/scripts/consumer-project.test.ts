@@ -116,6 +116,30 @@ describe('the package verification helper', () => {
     });
   });
 
+  it('reports a tar that cannot be started, keeping the original error as its cause', () => {
+    withTarball({ 'package/package.json': '{}' }, ({ tarball, destination }) => {
+      const pathKey = Object.keys(process.env).find((key) => key.toUpperCase() === 'PATH') ?? 'PATH';
+      const original = process.env[pathKey];
+      const emptyPath = mkdtempSync(join(tmpdir(), 'mailroll no tar '));
+      let thrown: unknown;
+
+      process.env[pathKey] = emptyPath;
+
+      try {
+        extractPackageTarball(tarball, destination);
+      } catch (error) {
+        thrown = error;
+      } finally {
+        process.env[pathKey] = original;
+        rmSync(emptyPath, { recursive: true, force: true });
+      }
+
+      expect(thrown).toBeInstanceOf(Error);
+      expect((thrown as Error).message).toMatch(/^tar could not run to extract .*fixture\.tgz into .*: \S/);
+      expect((thrown as Error).cause).toMatchObject({ code: 'ENOENT' });
+    });
+  });
+
   it('refuses an archive that is not laid out as an npm package tarball', () => {
     withTarball({ 'other/package.json': '{}' }, ({ tarball, destination }) => {
       expect(() => extractPackageTarball(tarball, destination)).toThrow(

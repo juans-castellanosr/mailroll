@@ -307,13 +307,18 @@ export function extractPackageTarball(tarball: string, destination: string): str
     input: readFileSync(tarball),
     encoding: 'utf8',
   });
-  const outcome =
-    result.signal === null ? `exit code ${String(result.status ?? 'unknown')}` : `signal ${result.signal}`;
 
-  if (result.error !== undefined || result.status !== 0 || result.signal !== null) {
-    throw new Error(`tar could not extract ${tarball} into ${destination} (${outcome}): ${result.stderr.trim()}`, {
+  if (result.error !== undefined) {
+    throw new Error(`tar could not run to extract ${tarball} into ${destination}: ${result.error.message}`, {
       cause: result.error,
     });
+  }
+
+  if (result.status !== 0 || result.signal !== null) {
+    const outcome =
+      result.signal === null ? `exit code ${String(result.status ?? 'unknown')}` : `signal ${result.signal}`;
+
+    throw new Error(`tar could not extract ${tarball} into ${destination} (${outcome}): ${result.stderr.trim()}`);
   }
 
   const extracted = join(destination, 'package');
