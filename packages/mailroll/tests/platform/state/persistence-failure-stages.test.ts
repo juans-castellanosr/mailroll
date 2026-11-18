@@ -363,7 +363,7 @@ describe('a history write that fails at each stage of a live send', () => {
     expect(error instanceof Error ? error.message : '').toContain(`invalid state file at ${list.template.statePath}: `);
     expect(error instanceof Error ? error.message : '').toMatch(/version/);
     expect(readFileSync(list.template.statePath, 'utf8')).toBe(V1_SNAPSHOT);
-    expect(journalOnDisk()).toEqual([]);
+    expect(existsSync(journalPath())).toBe(false);
   });
 
   it('history in an unsupported format that appears after the load: the refusal at the first write reaches the caller as a StatePersistenceError, and nothing changes', async () => {
@@ -381,7 +381,7 @@ describe('a history write that fails at each stage of a live send', () => {
     expect(persistence?.message).toContain(`ConfigError: invalid state file at ${list.template.statePath}: `);
     expect(persistence?.cause).toBeInstanceOf(ConfigError);
     expect(readFileSync(list.template.statePath, 'utf8')).toBe(V1_SNAPSHOT);
-    expect(journalOnDisk()).toEqual([]);
+    expect(existsSync(journalPath())).toBe(false);
   });
 
   it('outcome of a deliberate resend of a sent recipient not written: the restart keeps sent and records the uncertain resend', async () => {

@@ -208,7 +208,7 @@ mailroll creates a lock by writing it to a temporary file and hard-linking it in
 A live run touches the state files in this order:
 
 1. While the run is prepared, mailroll loads the state of every selected list, then takes the lock of every list before the first message is sent.
-2. The first write to a list prepares its files: for a new list it writes an empty snapshot first, and then it starts the journal with its header.
+2. The first append to a list prepares its files: for a new list it writes an empty snapshot first, and then it starts the journal with its header. A run that only compacts a new list, because it had nothing to send, writes the snapshot and no journal.
 3. For each message, it appends an intent line, sends, and appends the outcome line.
 4. When a list finishes or stops, mailroll writes a new snapshot to a temporary file, renames it over `<stem>.json`, and deletes the journal. If any intent is still open, for example after a history write failed, it keeps the journal instead and logs `state.journal_kept` with the reason `an intent is still open`, so the open intent is not lost. If the snapshot itself cannot be written after the list already stopped on an error, it logs `state.flush_failed` and reports the first error; otherwise the run fails with `could not record send state snapshot; …`. Either way the journal stays, and the next run replays it.
 5. When the run ends, successfully or not, it deletes its locks. A failure to delete one is logged as `state.lock_release_failed` and does not change the run's result.
@@ -219,17 +219,17 @@ Every history file mailroll writes is flushed to disk, and so is the folder afte
 
 | Problem | What mailroll does |
 | --- | --- |
-| Last journal line cut off by a crash | Ignores it; removes it before the next append |
-| Last journal line complete but without its newline | Reads it; adds the newline before the next append |
+| Last journal line without its final newline that is not a valid entry: cut off by a crash, or edited by hand | Ignores it; removes it before the next append |
+| Last journal line that is a valid entry but lacks its final newline | Reads it; adds the newline before the next append |
 | Any other journal line unreadable | Stops: `corrupt state journal at <path> (line N)` |
-| Last line of the journal complete but unreadable | Stops: `corrupt state journal at <path> (line N)`, and never writes after it |
+| Last journal line that ends with its newline but is not a valid entry | Stops: `corrupt state journal at <path> (line N)`, and never writes after it |
 | Snapshot is not valid JSON | Stops: `corrupt state file at <path>` |
 | Snapshot has the wrong shape or an unknown field | Stops: `invalid state file at <path>: …` |
 | Snapshot with `version` 1, 0 or no `version` | Stops: `invalid state file at <path>: version: …` |
 | Snapshot that is not a JSON object | Stops: `invalid state file at <path>: (root): …` |
 | Snapshot or journal from a newer mailroll | Stops: `… written by a newer mailroll; upgrade mailroll to use this history` |
 | Journal that does not start with its header line, including an empty or whitespace-only journal | Stops without changing anything: `corrupt state journal at <path>: it does not start with the mailroll journal header; nothing was changed, check the file before running again` |
-| Journal with no snapshot | Stops without changing anything: `the send history at <path> has a journal but no snapshot; nothing was changed, restore the matching files before running again` |
+| Readable journal with no snapshot | Stops without changing anything: `the send history at <path> has a journal but no snapshot; nothing was changed, restore the matching files before running again` |
 | Journal disappeared during a live run | Stops at the next history line: `the state journal at <path> disappeared during the run; nothing was written, and the run stops so no send goes unrecorded` |
 | Journal created by something else during a live run, before the run's first line | Stops at that line: `the state journal at <path> appeared before this run wrote to it, so something else created it: another program while this run held the list's lock, or another run that took the lock after this run lost it; nothing was written` |
 

@@ -259,7 +259,7 @@ Lists that finished earlier keep their recorded history. The menu, and the SDK w
 - **An unreadable snapshot** stops the run with `corrupt state file at <path>` (not valid JSON) or `invalid state file at <path>: ...` (unexpected content, including a field mailroll does not know).
 - **A snapshot with a `version` of 1 or 0, or no `version`** stops every run on that list with `invalid state file at <path>: version: …`, and a snapshot that is not a JSON object with `invalid state file at <path>: (root): …`, without changing anything.
 - **A journal that does not start with its header line** stops every run on that list with `corrupt state journal at <path>: it does not start with the mailroll journal header; nothing was changed, check the file before running again`, without changing anything. An empty journal, or one that holds only whitespace, has no header either.
-- **A journal with no snapshot** stops every run on that list with `the send history at <path> has a journal but no snapshot; nothing was changed, restore the matching files before running again`.
+- **A readable journal with no snapshot** stops every run on that list with `the send history at <path> has a journal but no snapshot; nothing was changed, restore the matching files before running again`.
 - **A history from a newer mailroll** stops every run on that list without changing anything.
 
 See [Damaged or incompatible state](/reference/files#damaged-or-incompatible-state) for every message.

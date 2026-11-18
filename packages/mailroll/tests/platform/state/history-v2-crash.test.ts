@@ -116,6 +116,7 @@ afterAll(() => {
 });
 
 const MARK: RecipientJournalEntry = { email: 'nobody@example.com', released: { at: '2026-02-01T00:00:00.000Z' } };
+const RETRY_MARK: RecipientJournalEntry = { email: 'retry@example.com', released: { at: '2026-02-02T00:00:00.000Z' } };
 
 async function withPower<T>(
   budget: number,
@@ -197,10 +198,11 @@ describe('a run killed at any step of the first write of a list', { timeout: 30_
 
         expect(await new FileStateStore().load(list.template)).toEqual(expected);
 
-        await liveWrite(list, (store) => store.append(list.template, MARK), Number.POSITIVE_INFINITY);
+        await liveWrite(list, (store) => store.append(list.template, RETRY_MARK), Number.POSITIVE_INFINITY);
 
         expect(await new FileStateStore().load(list.template)).toEqual(expected);
         expect(fileNames(dirname(list.snapshotPath))).toEqual(['list.json', 'list.jsonl']);
+        expect(readFileSync(list.journalPath, 'utf8').trimEnd().split('\n').at(-1)).toBe(JSON.stringify(RETRY_MARK));
 
         if (!attempt.crashed) {
           boundaries = attempt.boundaries;

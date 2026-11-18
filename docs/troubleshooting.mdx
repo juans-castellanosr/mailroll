@@ -369,9 +369,9 @@ Each entry starts from a message mailroll prints. Errors are printed on stderr a
 
 **Symptom:** `corrupt state journal at <path> (line <N>)`, `corrupt state file at <path>`, or `invalid state file at <path>: <details>`, exit code `1`.
 
-**Cause:** a history file of the list was damaged or edited by hand. An `invalid state file` message that names the `version` field means the snapshot has `version` 1, 0 or no `version`, and one that names `(root)` means it is not a JSON object: mailroll reads only the current history format and changes nothing.
+**Cause:** a history file of the list was damaged or edited by hand. mailroll reads only the current history format and changes nothing. The `<details>` of an `invalid state file` message name each field that failed and why, for example `version: …` for a snapshot whose `version` is not 2, or `(root): …` for a snapshot that is not a JSON object or has a field mailroll does not know.
 
-**Fix:** keep a copy, then fix or remove the reported line or field. When the message names `version` or `(root)`, do not edit the snapshot: restore it from a backup of the folder. Do not delete the history: the next `pending` run would send to everyone again. See [Send history](/guides/history).
+**Fix:** keep a copy of the `.state/` folder first, and read the full message to see what failed. Then either fix the reported line or field, or restore the history from a backup of the folder. Before you resume after a restore, make sure the restored snapshot and journal record every send made since that backup was taken: a send they do not record is sent again by the next `pending` run. If you cannot establish that, find those sends in the provider's own records first (for Outlook connections, `mailroll-outlook export-sent` lists the Sent Items), and take every recipient you find there out of the list's CSV file before you run again. mailroll has no command to record a send by hand, so a recipient left in the list and missing from the restored history is sent again. Do not delete the history: the next `pending` run would send to everyone again. See [Send history](/guides/history).
 
 ### Could not record send state
 
@@ -386,7 +386,7 @@ The log has a `recipient.unrecorded` error event for each recipient whose write 
 
 **Cause:** a history line or the snapshot could not be written. The list stopped. The `<reason>` names what refused the write: the disk, for example because it is full or the `.state/` folder is not writable, the list's lock, when it reads `ConfigError: the send state of "<template>" · <file.csv> can only be written by the store that holds its lock and loaded it after taking it (…); nothing was written`, or another refusal of the history files, when it reads `ConfigError: the state journal at <path> disappeared during the run; …`. It can also read `ConfigError: refusing to write a send history mailroll could not read back: …` or `ConfigError: refusing to write a journal line mailroll could not read back: …`. mailroll checks every snapshot and journal line against its own history format before writing it, and refuses to write one it would reject on the next load; nothing is written. This is an internal safeguard that a correct run never triggers, so please [report it](https://github.com/juans-castellanosr/mailroll/issues) with the message.
 
-**Fix:** remove the cause first. For a disk problem, fix the disk or permissions. For a lock problem, see [The send state can only be written by the store that holds its lock](#the-send-state-can-only-be-written-by-the-store-that-holds-its-lock): a run that took the list over does not send again the recipients this run left uncertain; see [Locks](/guides/history#locks) for the remaining limits. For the others, see [The journal disappeared during the run](#the-journal-disappeared-during-the-run) and [The journal appeared before the run wrote to it](#the-journal-appeared-before-the-run-wrote-to-it). Then act on the message:
+**Fix:** remove the cause first. For a disk problem, fix the disk or permissions. For a lock problem, see [The send state can only be written by the store that holds its lock](#the-send-state-can-only-be-written-by-the-store-that-holds-its-lock): a run that took the list over does not send again the recipients this run left uncertain; see [Locks](/guides/history#locks) for the remaining limits. For the others, see [The journal disappeared during the run](#the-journal-disappeared-during-the-run) and [The journal appeared before the run wrote to it](#the-journal-appeared-before-the-run-wrote-to-it). When the nested message names a damaged or unsupported history file, such as `corrupt state journal`, `invalid state file` or a journal without its header, see [Corrupt state journal or state file](#corrupt-state-journal-or-state-file). Choose the procedure from the nested error message. Then act on the message:
 
 - **Before sending:** this run did not call the provider for that recipient. If the next run shows it as uncertain, you can confirm with your provider that nothing arrived.
 - **After sending:** the provider was called. Check the mailbox's Sent Items, or your provider, before resending.
@@ -415,7 +415,7 @@ With several connections, the message and the `recipient.unrecorded` event of a 
 
 **Symptom:** `the send history at <path> has a journal but no snapshot; nothing was changed, restore the matching files before running again`, exit code `1`.
 
-**Cause:** the snapshot was removed or replaced by hand while its journal was still there.
+**Cause:** the snapshot was removed or replaced by hand while its journal was still there. This message appears only when the journal itself is readable; a journal that is empty or has no header line reports the missing-header error first.
 
 **Fix:** put back the snapshot that belongs with the journal. See [Damaged or incompatible state](/reference/files#damaged-or-incompatible-state).
 

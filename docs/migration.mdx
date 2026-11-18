@@ -119,7 +119,7 @@ Code that only reads results and calls `needsAttention` keeps compiling. Code th
 | `emptyState()` returns `version: 2` | Changes stored data of stores that save it | Compiles | — |
 | New optional fields on `RecipientStatus`, `ResendFailure`, `RecipientJournalEntry` and `SendResult` | — | Compile | Written by `FileStateStore` |
 
-New exports: `CcObservation` and `foldJournal` in `@mailroll/core` (and `mailroll`). Nothing was removed.
+New exports: `CcObservation` and `foldJournal` in `@mailroll/core` (and `mailroll`). Removed exports: `StoredTemplateState`, `TemplateStateV1` and `upgradeTemplateState` from `@mailroll/core` (and `mailroll`), and `RunHistory` and `HistoryPresence` from `mailroll`. A store implements the `TemplateState` contract shown below.
 
 A store that implements `StateStore`. `load` returns a `TemplateState`, and `compact` receives one:
 

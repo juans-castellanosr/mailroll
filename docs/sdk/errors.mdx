@@ -225,7 +225,7 @@ export async function run(
 
 The order of the checks matters: a possible unrecorded send is the most urgent, so it is tested first. Unknown errors are rethrown rather than hidden.
 
-A `StatePersistenceError` whose `cause` is a `ConfigError` is the store refusing the write, not a disk problem: a lost lock, or a journal that disappeared or appeared during the run. The handler passes on its message instead of asking for a disk fix. If the message says the lock no longer belongs to this run, something touched the `.state/` folder during the run. A send this run had started is read as uncertain, so another run on the same list does not send it again by itself; check those recipients before resending. See [Locks](/guides/history#locks).
+A `StatePersistenceError` whose `cause` is a `ConfigError` is the store refusing the write, not a disk problem: a lost lock, a journal that disappeared or appeared during the run, or a history file that is damaged or in an unsupported format, which the nested message names; see [Corrupt state journal or state file](/troubleshooting#corrupt-state-journal-or-state-file) for that case. The handler passes on its message instead of asking for a disk fix. If the message says the lock no longer belongs to this run, something touched the `.state/` folder during the run. A send this run had started is read as uncertain, so another run on the same list does not send it again by itself; check those recipients before resending. See [Locks](/guides/history#locks).
 
 ## CLI exit codes
 
