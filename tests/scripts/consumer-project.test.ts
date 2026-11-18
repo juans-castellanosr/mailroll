@@ -1,5 +1,78 @@
+import { execSync, spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { captureNode, windowsCommandLine } from '../../scripts/consumer-project.ts';
+import { captureNode, extractPackageTarball, windowsCommandLine } from '../../scripts/consumer-project.ts';
+
+const LAUNCHED_ARGUMENTS = ['', 'a b', 'say "hi"', '""', 'a&echo injected', 'a|b', '(a)', 'C:\\Users\\Ana Ruiz\\store'];
+
+interface LauncherWorkspace {
+  readonly launcherDir: string;
+  readonly consumerDir: string;
+  readonly env: NodeJS.ProcessEnv;
+}
+
+function withLauncherOnPath(use: (workspace: LauncherWorkspace) => void): void {
+  const base = mkdtempSync(join(tmpdir(), 'mailroll launcher '));
+  const launcherDir = join(base, 'launcher dir');
+  const consumerDir = join(base, 'consumer dir');
+
+  try {
+    mkdirSync(launcherDir);
+    mkdirSync(consumerDir);
+    writeFileSync(
+      join(launcherDir, 'probe.js'),
+      'process.stdout.write(JSON.stringify({ dir: __dirname, argv: process.argv.slice(2) }));\nprocess.exitCode = Number(process.env.PROBE_EXIT ?? 0);\n',
+    );
+    writeFileSync(
+      join(launcherDir, 'mailroll-probe.cmd'),
+      `@ECHO OFF\r\n"${process.execPath}" "%~dp0probe.js" %*\r\nEXIT /B %ERRORLEVEL%\r\n`,
+    );
+
+    const pathKey = Object.keys(process.env).find((key) => key.toUpperCase() === 'PATH') ?? 'PATH';
+
+    use({
+      launcherDir,
+      consumerDir,
+      env: { ...process.env, [pathKey]: `${launcherDir};${process.env[pathKey] ?? ''}` },
+    });
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+}
+
+interface TarballFixture {
+  readonly tarball: string;
+  readonly destination: string;
+}
+
+function withTarball(entries: Readonly<Record<string, string>>, use: (fixture: TarballFixture) => void): void {
+  const base = mkdtempSync(join(tmpdir(), 'mailroll tarball '));
+  const source = join(base, 'source');
+  const destination = join(base, 'destination');
+
+  try {
+    mkdirSync(destination);
+
+    for (const [path, content] of Object.entries(entries)) {
+      mkdirSync(dirname(join(source, path)), { recursive: true });
+      writeFileSync(join(source, path), content);
+    }
+
+    const roots = [...new Set(Object.keys(entries).map((path) => path.split('/')[0] ?? path))];
+    const packed = spawnSync('tar', ['-czf', 'fixture.tgz', ...roots], { cwd: source, encoding: 'utf8' });
+
+    expect(packed.status, packed.stderr).toBe(0);
+    use({ tarball: join(source, 'fixture.tgz'), destination });
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+}
+
+function launched(output: string): { readonly dir: string; readonly argv: readonly string[] } {
+  return JSON.parse(output) as { readonly dir: string; readonly argv: readonly string[] };
+}
 
 describe('the package verification helper', () => {
   it('passes empty arguments and arguments with spaces to Node.js intact', () => {
@@ -11,9 +84,100 @@ describe('the package verification helper', () => {
     expect(JSON.parse(echoed)).toEqual(['', 'a b', '--json']);
   });
 
-  it('quotes every part of a Windows package-manager command line, including empty ones', () => {
+  it('quotes every argument of a Windows package-manager command line, including empty ones, but not the command name', () => {
     expect(windowsCommandLine('pnpm', ['install', '', 'C:\\Users\\Ana Ruiz\\store', 'say "hi"'])).toBe(
-      '"pnpm" "install" "" "C:\\Users\\Ana Ruiz\\store" "say ""hi"""',
+      'pnpm "install" "" "C:\\Users\\Ana Ruiz\\store" "say ""hi"""',
     );
   });
+
+  it.each(['', 'npm & calc', 'C:\\tools\\npm', '"npm"'])('refuses %j as a Windows command name', (command) => {
+    expect(() => windowsCommandLine(command, ['install'])).toThrow(/only a bare command name found on PATH is allowed/);
+  });
+
+  it('extracts a package tarball given by an absolute path, whatever tar is first on PATH', () => {
+    const entries = { 'package/package.json': '{"name":"probe"}', 'package/lib/index.js': 'export {};' };
+
+    withTarball(entries, ({ tarball, destination }) => {
+      const extracted = extractPackageTarball(tarball, destination);
+
+      expect(extracted).toBe(join(destination, 'package'));
+      expect(readFileSync(join(extracted, 'package.json'), 'utf8')).toBe(entries['package/package.json']);
+      expect(readFileSync(join(extracted, 'lib', 'index.js'), 'utf8')).toBe(entries['package/lib/index.js']);
+    });
+  });
+
+  it('stops with the exit code and the message of tar when an archive cannot be extracted', () => {
+    withTarball({ 'package/package.json': '{}' }, ({ tarball, destination }) => {
+      writeFileSync(tarball, 'not a gzip archive');
+
+      expect(() => extractPackageTarball(tarball, destination)).toThrow(
+        /^tar could not extract .*fixture\.tgz into .* \(exit code [1-9]\d*\): \S/,
+      );
+    });
+  });
+
+  it('reports a tar that cannot be started, keeping the original error as its cause', () => {
+    withTarball({ 'package/package.json': '{}' }, ({ tarball, destination }) => {
+      const pathKey = Object.keys(process.env).find((key) => key.toUpperCase() === 'PATH') ?? 'PATH';
+      const original = process.env[pathKey];
+      const emptyPath = mkdtempSync(join(tmpdir(), 'mailroll no tar '));
+      let thrown: unknown;
+
+      process.env[pathKey] = emptyPath;
+
+      try {
+        extractPackageTarball(tarball, destination);
+      } catch (error) {
+        thrown = error;
+      } finally {
+        process.env[pathKey] = original;
+        rmSync(emptyPath, { recursive: true, force: true });
+      }
+
+      expect(thrown).toBeInstanceOf(Error);
+      expect((thrown as Error).message).toMatch(/^tar could not run to extract .*fixture\.tgz into .*: \S/);
+      expect((thrown as Error).cause).toMatchObject({ code: 'ENOENT' });
+    });
+  });
+
+  it('refuses an archive that is not laid out as an npm package tarball', () => {
+    withTarball({ 'other/package.json': '{}' }, ({ tarball, destination }) => {
+      expect(() => extractPackageTarball(tarball, destination)).toThrow(
+        /fixture\.tgz does not contain package\/package\.json, so it is not an npm package tarball/,
+      );
+    });
+  });
+
+  it.runIf(process.platform === 'win32')(
+    'runs a launcher found on PATH from its own folder, with its arguments intact, as the harness runs npm',
+    () => {
+      withLauncherOnPath(({ launcherDir, consumerDir, env }) => {
+        const output = execSync(windowsCommandLine('mailroll-probe', LAUNCHED_ARGUMENTS), {
+          cwd: consumerDir,
+          env,
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+
+        expect(launched(output)).toEqual({ dir: launcherDir, argv: LAUNCHED_ARGUMENTS });
+      });
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'runs a launcher found on PATH through a shell and reports its exit code, as the harness runs package binaries',
+    () => {
+      withLauncherOnPath(({ launcherDir, consumerDir, env }) => {
+        const result = spawnSync(windowsCommandLine('mailroll-probe', LAUNCHED_ARGUMENTS), {
+          cwd: consumerDir,
+          env: { ...env, PROBE_EXIT: '7' },
+          shell: true,
+          encoding: 'utf8',
+        });
+
+        expect(result.status).toBe(7);
+        expect(launched(result.stdout)).toEqual({ dir: launcherDir, argv: LAUNCHED_ARGUMENTS });
+      });
+    },
+  );
 });

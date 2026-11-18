@@ -64,8 +64,14 @@ function streamNode(args: readonly string[], options: ExecFileSyncOptions): void
   execFileSync(process.execPath, args, { ...options, stdio: 'inherit' });
 }
 
+const BARE_COMMAND = /^[A-Za-z0-9._-]+$/;
+
 export function windowsCommandLine(command: string, args: readonly string[]): string {
-  return [command, ...args].map((part) => `"${part.replaceAll('"', '""')}"`).join(' ');
+  if (!BARE_COMMAND.test(command)) {
+    throw new Error(`refusing to run ${JSON.stringify(command)}: only a bare command name found on PATH is allowed`);
+  }
+
+  return [command, ...args.map((part) => `"${part.replaceAll('"', '""')}"`)].join(' ');
 }
 
 function packageManagerCommand(pm: PackageManager): { readonly command: string; readonly prefix: readonly string[] } {
@@ -293,6 +299,35 @@ export function packDirectory(packageDir: string, destination: string): string {
   streamPackageManager('npm', ['pack', packageDir, '--pack-destination', destination, '--silent'], destination);
 
   return tarballIn(destination, readManifest(packageDir));
+}
+
+export function extractPackageTarball(tarball: string, destination: string): string {
+  const result = spawnSync('tar', ['-xzf', '-'], {
+    cwd: destination,
+    input: readFileSync(tarball),
+    encoding: 'utf8',
+  });
+
+  if (result.error !== undefined) {
+    throw new Error(`tar could not run to extract ${tarball} into ${destination}: ${result.error.message}`, {
+      cause: result.error,
+    });
+  }
+
+  if (result.status !== 0 || result.signal !== null) {
+    const outcome =
+      result.signal === null ? `exit code ${String(result.status ?? 'unknown')}` : `signal ${result.signal}`;
+
+    throw new Error(`tar could not extract ${tarball} into ${destination} (${outcome}): ${result.stderr.trim()}`);
+  }
+
+  const extracted = join(destination, 'package');
+
+  if (!existsSync(join(extracted, 'package.json'))) {
+    throw new Error(`${tarball} does not contain package/package.json, so it is not an npm package tarball`);
+  }
+
+  return extracted;
 }
 
 const MIN_DEFINITION_LENGTH = 80;

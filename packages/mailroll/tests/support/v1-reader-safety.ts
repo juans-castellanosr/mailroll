@@ -23,7 +23,7 @@ export function describeV1ReaderSafety(root: () => string): void {
   const v1Snapshot = fixture('snapshot.json');
   const v1Event = fixture('journal-mixed.jsonl').split('\n')[0] ?? '';
 
-  describe('the published v1 reader (frozen copy) facing v2 history files', () => {
+  describe('the 0.1.0 reader (frozen copy) facing v2 history files', () => {
     it('stops at the v2 barrier a live run writes, and changes no file', async () => {
       const list = stageList(root(), { snapshot: v1Snapshot, journal: fixture('journal-mixed.jsonl') });
       const store = new FileStateStore();

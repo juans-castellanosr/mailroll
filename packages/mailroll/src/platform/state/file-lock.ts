@@ -206,7 +206,7 @@ async function recoverUnderMarker(path: string, stale: Present, self: OwnRecord)
 
   const moved = await inspect(aside);
 
-  if (moved.kind !== 'present' || moved.identity !== again.identity) {
+  if (moved.kind !== 'present' || moved.identity !== again.identity || !sameRecord(moved.record, again.record)) {
     throw new ConfigError(
       `the lock ${path} was replaced while it was being recovered, which only happens if someone deleted it by hand during the recovery; nothing was deleted: ${keptDetail(aside, moved)}. ${REMEDY}`,
     );

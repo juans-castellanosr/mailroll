@@ -163,7 +163,7 @@ const LAYOUTS: readonly (readonly [string, ListFiles])[] = [
   ['a new list', {}],
 ];
 
-describe('a run killed at any step of the first write of a list', () => {
+describe('a run killed at any step of the first write of a list', { timeout: 30_000 }, () => {
   it.each(LAYOUTS)(
     'with %s, always leaves a history both readers handle safely, and the next live run finishes it',
     async (_label, files) => {

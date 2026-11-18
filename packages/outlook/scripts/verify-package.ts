@@ -9,6 +9,7 @@ import {
   compileTypes,
   consumerRunner,
   copiedDefinitions,
+  extractPackageTarball,
   nodeTypeRoots,
   type PackageManifest,
   packDirectory,
@@ -174,8 +175,7 @@ function verifyIncompatiblePeerIsRefused(outlookTarball: string, coreTarball: st
   try {
     const unpacked = join(work, 'unpacked');
 
-    spawnSync('tar', ['-xzf', outlookTarball, '-C', work], { stdio: 'ignore' });
-    cpSync(join(work, 'package'), unpacked, { recursive: true });
+    cpSync(extractPackageTarball(outlookTarball, work), unpacked, { recursive: true });
 
     const alteredManifest = JSON.parse(readFileSync(join(unpacked, 'package.json'), 'utf8')) as PackageManifest & {
       peerDependencies: Record<string, string>;

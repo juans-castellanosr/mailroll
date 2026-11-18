@@ -480,7 +480,7 @@ describe('the evidence a v2 history keeps', () => {
 });
 
 describe('restoring the v1 files by hand (only when no v2 event exists)', () => {
-  it('gives the published v1 reader back exactly the history it had', async () => {
+  it('gives the 0.1.0 reader back exactly the history it had', async () => {
     const files = { snapshot: fixture('snapshot.json'), journal: fixture('journal-mixed.jsonl') };
     const list = stageList(root, files);
     const original = await new FrozenV1FileStateStore().load(v1(list));
