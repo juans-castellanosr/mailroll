@@ -1,6 +1,6 @@
 {
   "name": "mailroll",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Send personalized email campaigns from CSV lists with per-list send history, safe resends, dry-run previews and a guided CLI. Node SDK plus a browser-safe core.",
   "keywords": [
     "email",

@@ -1,6 +1,6 @@
 {
   "name": "@mailroll/outlook",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "The official Microsoft Outlook (Microsoft Graph) integration for mailroll: sends through a Microsoft 365 mailbox with delegated sign-in, plus the mailroll-outlook tool to export Sent Items.",
   "keywords": [
     "email",
