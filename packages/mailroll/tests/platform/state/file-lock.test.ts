@@ -152,21 +152,21 @@ describe('the identity of a lock acquisition', () => {
   });
 });
 
-describe('locks written by an earlier version or damaged', () => {
-  it('never recovers an earlier-version lock, because it does not say which process space it was taken in', async () => {
+describe('locks without a process space or damaged', () => {
+  it('never recovers a lock that does not say which process space it was taken in', async () => {
     const path = join(dir, 'list.lock');
-    const earlier = JSON.stringify({ pid: DEAD_PID, host: hostname(), startedAt: 'T0' });
+    const unrecorded = JSON.stringify({ pid: DEAD_PID, host: hostname(), startedAt: 'T0' });
 
-    writeFileSync(path, earlier);
+    writeFileSync(path, unrecorded);
 
     await expect(acquireFileLock(path, 'the list')).rejects.toThrow(
       /in use by another run \(process \d+ on .*, since T0\), and mailroll cannot tell whether that process is still running: it does not record the process space/,
     );
     expect(readdirSync(dir)).toEqual(['list.lock']);
-    expect(readFileSync(path, 'utf8')).toBe(earlier);
+    expect(readFileSync(path, 'utf8')).toBe(unrecorded);
   });
 
-  it('never displaces an earlier-version lock whose process is alive', async () => {
+  it('never displaces a lock without a process space whose process is alive', async () => {
     const path = join(dir, 'list.lock');
     const live = JSON.stringify({ pid: process.pid, host: hostname(), startedAt: 'T0' });
 

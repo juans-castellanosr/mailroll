@@ -9,7 +9,6 @@ export {
   type ListRef,
   RunInterruptedError,
   runSelection,
-  type RunHistory,
   type RunSelectionOptions,
   type TemplateRunResult,
 } from '../platform/composition/build-runner';
@@ -22,7 +21,6 @@ export { connectionEnvKey } from '../platform/config/resolve-connection-secrets'
 export { discoverCampaigns } from '../platform/discovery/discover-campaigns';
 export { ConsoleLogger, type ConsoleLoggerOptions, type LogLevel } from '../platform/logging/console-logger';
 export { FileStateStore } from '../platform/state/file-state-store';
-export type { HistoryPresence } from '../platform/state/history-presence';
 export {
   type CampaignReport,
   type CampaignStatusOptions,

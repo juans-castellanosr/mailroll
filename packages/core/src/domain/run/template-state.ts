@@ -52,45 +52,6 @@ export interface TemplateState {
   readonly updatedAt: string;
 }
 
-interface ResendFailureV1 {
-  readonly at: string;
-  readonly connectionId: string;
-  readonly outcome: 'failed' | 'uncertain';
-  readonly message: string;
-  readonly category?: FailureCategory;
-}
-
-type RecipientStatusV1 =
-  | {
-      readonly status: 'sent';
-      readonly at: string;
-      readonly connectionId: string;
-      readonly resendFailure?: ResendFailureV1;
-    }
-  | {
-      readonly status: 'failed';
-      readonly at: string;
-      readonly connectionId: string;
-      readonly category: FailureCategory;
-      readonly message: string;
-    }
-  | {
-      readonly status: 'uncertain';
-      readonly at: string;
-      readonly connectionId: string;
-      readonly message: string;
-      readonly resendFailure?: ResendFailureV1;
-    };
-
-export interface TemplateStateV1 {
-  readonly version: 1;
-  readonly templateId: string;
-  readonly recipients: Readonly<Record<string, RecipientStatusV1>>;
-  readonly updatedAt: string;
-}
-
-export type StoredTemplateState = TemplateState | TemplateStateV1;
-
 export type RecipientJournalEntry =
   | { readonly email: string; readonly status: RecipientStatus }
   | {
@@ -105,10 +66,6 @@ export const emptyState = (templateId: string): TemplateState => ({
   recipients: {},
   updatedAt: new Date(0).toISOString(),
 });
-
-export function upgradeTemplateState(state: StoredTemplateState): TemplateState {
-  return state.version === 2 ? state : { ...state, version: 2 };
-}
 
 export function settleStatus(previous: RecipientStatus | undefined, next: RecipientStatus): RecipientStatus {
   return withUncertainHistory(settledRecord(previous, next), [previous, next]);

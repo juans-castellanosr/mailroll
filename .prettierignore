@@ -9,4 +9,3 @@ pnpm-lock.yaml
 .claude/
 .pack/
 *.mdx
-packages/mailroll/tests/fixtures/state-v1/

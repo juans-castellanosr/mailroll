@@ -78,10 +78,7 @@ export {
   type RecipientStatus,
   type ResendFailure,
   settleStatus,
-  type StoredTemplateState,
   type TemplateState,
-  type TemplateStateV1,
-  upgradeTemplateState,
 } from './domain/run/template-state';
 export { MemoryStateStore } from './adapters/memory-state-store';
 export { collectRecipients, type CollectedRecipients, type ValidRecipient } from './engine/collect-recipients';

@@ -17,7 +17,6 @@ Each CSV list of a template has its own history in the template's `.state/` fold
 - `.state/recipients.jsonl`, the **journal**: one line is appended for every step of every send while the list runs.
 - `.state/recipients.json`, the **snapshot**: the status of every recipient, rewritten when a list finishes.
 - `.state/recipients.json.lock`, the **lock**, present only while a live run uses the list. See [Locks](#locks).
-- `.state/recipients.json.v1-backup` and `.state/recipients.jsonl.v1-backup`, only for a list that was upgraded from mailroll 0.1. See [Upgrading an older history](#upgrading-an-older-history).
 
 mailroll creates these files readable only by your user. See [State files](/reference/files#state-files) for the full layout.
 
@@ -101,7 +100,7 @@ Some entries carry evidence that helps you find a message with your provider. Ev
 - **`uncertainAttemptIds`** keeps the `attemptId` of every earlier intent for the recipient that ended uncertain and is no longer shown in the entry. For example, if a deliberate resend `B` of a sent message is uncertain and a later resend `C` is accepted, the entry is `sent` with `attemptId` `C` and `uncertainAttemptIds` `["B"]`: `B` may still have been delivered.
 - **`cc`** records CC addresses the provider rejected; see [Rejected CC](#rejected-cc).
 
-mailroll never invents evidence. Entries written by mailroll 0.1, and sends through providers that receive no attempt ids, have none.
+mailroll never invents evidence. Sends through providers that receive no attempt ids have none.
 
 `mailroll status --json` lists the entries that need tracing in `evidence`; see [status](/cli/status).
 
@@ -123,7 +122,6 @@ The summary counts messages with a rejected CC, not rejected addresses. See [Aut
 | Sends | To the list's recipients | Every message to the test address | Nothing |
 | Writes history | Yes | No | No |
 | Evidence in the summary | Yes, and recorded | Yes, but not recorded | No |
-| Upgrades a v1 history | Yes, at its first write | No; warns that the next live run will | No; warns that the next live run will |
 
 In a test send, a rejected CC is reported for the send to the test address and the summary says that nothing was recorded. The next live run still sends to every list recipient.
 
@@ -197,7 +195,7 @@ could not record send state after sending to ada@example.com; the history will r
 | Release, after a stopped send | `could not record send state after the send to <address> stopped without the provider accepting it (it may not have been called); the history will read this attempt as uncertain` | The provider did not accept it |
 | Snapshot, when the list ends | `could not record send state snapshot; no recorded outcome is lost, and the next live run replays the journal` | The journal still holds every outcome |
 
-Each message ends with the cause: an error from the file system; if the run no longer holds the list's lock, `ConfigError: the send state of … can only be written by the store that holds its lock …`, or, when the lock was lost just after an intent was written, `ConfigError: the intent to send to <address> was written to the send state of …, but right after it this run could no longer confirm that it holds its lock (…); nothing was sent to <address>, and the history now reads it as uncertain`, or, when it was lost while the history files were being prepared or compacted, `ConfigError: … while preparing the history files this run could no longer confirm that it holds it (…); it stopped before changing them further` or `ConfigError: the snapshot of the send state of … was written, but right after it this run could no longer confirm that it holds its lock (…); the journal was kept, so no record written by another run was removed`; or another refusal of the history files, such as `ConfigError: cannot upgrade …` or `ConfigError: the state journal at <path> disappeared during the run; …`. A lost lock is not a disk problem: something deleted or replaced the lock file during the run, and another run may have started on the same list; see the warning under [Locks](#locks). For every failed intent, outcome or release, the log also has a `recipient.unrecorded` error event with the recipient, the connection and the `stage` that failed. If an intent is still open when the list stops, mailroll keeps the journal and logs `state.journal_kept`, so the next run reads that send as uncertain.
+Each message ends with the cause: an error from the file system; if the run no longer holds the list's lock, `ConfigError: the send state of … can only be written by the store that holds its lock …`, or, when the lock was lost just after an intent was written, `ConfigError: the intent to send to <address> was written to the send state of …, but right after it this run could no longer confirm that it holds its lock (…); nothing was sent to <address>, and the history now reads it as uncertain`, or, when it was lost while the history files were being prepared or compacted, `ConfigError: … while preparing the history files this run could no longer confirm that it holds it (…); it stopped before changing them further` or `ConfigError: the snapshot of the send state of … was written, but right after it this run could no longer confirm that it holds its lock (…); the journal was kept, so no record written by another run was removed`; or another refusal of the history files, such as `ConfigError: the state journal at <path> disappeared during the run; …`. A lost lock is not a disk problem: something deleted or replaced the lock file during the run, and another run may have started on the same list; see the warning under [Locks](#locks). For every failed intent, outcome or release, the log also has a `recipient.unrecorded` error event with the recipient, the connection and the `stage` that failed. If an intent is still open when the list stops, mailroll keeps the journal and logs `state.journal_kept`, so the next run reads that send as uncertain.
 
 Fix the cause, then check the named recipient before resending, unless the message says this run did not call the provider. With several connections, writes are shared: a recipient on another connection whose write was refused right after the failure gets a message with its own stage and address, but carries the cause of the write that failed first.
 
@@ -212,7 +210,7 @@ the send state of "welcome" · recipients.csv is in use by another run (process 
 The locks of all lists are taken after sign-in and before the first send, and released when the run ends, also when it fails. Dry-runs and test runs do not take locks. Before every write to the history, the run checks that the lock file still holds its `token`; once a check fails, the run starts no other write and stops. A line the run was already appending when the lock was lost can still reach the journal; see the warning below for when that matters. Two more checks protect the other run:
 
 - After writing an intent, and before calling the provider, the run checks again. If the lock was lost while the intent was being written, the run stops without sending that message. The history then reads that recipient as uncertain with the message `the run ended before the outcome of this send was recorded (crash, kill or power loss)`, although this run did not call the provider for it.
-- Right before each step that replaces, shortens or deletes a history file (writing the snapshot, deleting the journal, cutting off a torn last line, and the steps of the v1 upgrade), the run checks again and stops without that step if the lock is no longer its own. So a run that lost its lock normally does not overwrite or delete what the run that took the list over has written; the warning below lists the exceptions.
+- Right before each step that replaces, shortens or deletes a history file (writing the snapshot, deleting the journal, and cutting off a torn last line), the run checks again and stops without that step if the lock is no longer its own. So a run that lost its lock normally does not overwrite or delete what the run that took the list over has written; the warning below lists the exceptions.
 
 ### Stale locks
 
@@ -241,7 +239,7 @@ This greatly reduces the risk of a duplicate, but does not rule it out:
 
 A send that timed out at the provider stays uncertain whatever the lock does.
 
-mailroll does not support these setups, and a duplicate there is not a bug it can prevent: resuming a suspended run after its lock was deleted; concurrent runs on one list from an SMB share, a Windows folder opened from WSL, or a synchronized folder; machines that share a folder under the same host name; a run of mailroll 0.1 on a list that mailroll 0.2 also uses, before or after the upgrade; a state store that takes no lock; and deliberately resending an uncertain recipient while another run on the list may still be alive.
+mailroll does not support these setups, and a duplicate there is not a bug it can prevent: resuming a suspended run after its lock was deleted; concurrent runs on one list from an SMB share, a Windows folder opened from WSL, or a synchronized folder; machines that share a folder under the same host name; a run of mailroll 0.1 on a list that mailroll 0.2 also uses; a state store that takes no lock; and deliberately resending an uncertain recipient while another run on the list may still be alive.
 </Warning>
 
 ## Changed CSV files
@@ -259,8 +257,10 @@ Lists that finished earlier keep their recorded history. The menu, and the SDK w
 - **An incomplete last journal line**, left by a write cut short, is ignored when the history is read, and the next live run removes it before appending. If that line was an outcome, the recipient's intent is still open, so that send is read as uncertain. A last line that is complete but lacks its final newline is read normally; the next live run keeps it and adds the newline before appending.
 - **Any other unreadable journal line** stops every run on that list before it sends: `corrupt state journal at <path> (line N)`.
 - **An unreadable snapshot** stops the run with `corrupt state file at <path>` (not valid JSON) or `invalid state file at <path>: ...` (unexpected content, including a field mailroll does not know).
-- **A history from a newer mailroll**, or a v2 journal next to a v1 snapshot or no snapshot, stops every run on that list without changing anything.
-- **A v1 history mailroll cannot keep in full** (a field mailroll 0.1 never wrote, or an unreadable complete last journal line) can still be read, but a live run refuses to upgrade it at its first write and stops before sending. The refusal arrives inside the history-write error, for example `could not record send state before sending to <address>; …: ConfigError: cannot upgrade the state file at <path>: …`.
+- **A snapshot with a `version` of 1 or 0, or no `version`** stops every run on that list with `invalid state file at <path>: version: …`, and a snapshot that is not a JSON object with `invalid state file at <path>: (root): …`, without changing anything.
+- **A journal that does not start with its header line** stops every run on that list with `corrupt state journal at <path>: it does not start with the mailroll journal header; nothing was changed, check the file before running again`, without changing anything. An empty journal, or one that holds only whitespace, has no header either.
+- **A readable journal with no snapshot** stops every run on that list with `the send history at <path> has a journal but no snapshot; nothing was changed, restore the matching files before running again`.
+- **A history from a newer mailroll** stops every run on that list without changing anything.
 
 See [Damaged or incompatible state](/reference/files#damaged-or-incompatible-state) for every message.
 
@@ -269,12 +269,6 @@ mailroll does not repair these files for you. Keep a copy, inspect the reported 
 <Warning>
 Do not delete a damaged history to get past the error. Without history, the `pending` policy sends to everyone in the list again.
 </Warning>
-
-## Upgrading an older history
-
-mailroll 0.2 reads histories written by mailroll 0.1 and upgrades each list the first time a live run writes to it. The upgrade copies the old snapshot to `<stem>.json.v1-backup`, moves the old journal unchanged to `<stem>.jsonl.v1-backup`, and adds no evidence the old files did not have. After the upgrade, mailroll 0.1 refuses the list's history, so do not go back to 0.1 for that list unless you follow [Restoring the v1 files](/reference/files#restoring-the-v1-files), which is only safe while nothing has been sent with 0.2.
-
-If the upgrade is interrupted, the next live run finishes it. See [Upgrade from the v1 format](/reference/files#upgrade-from-the-v1-format).
 
 ## Related
 

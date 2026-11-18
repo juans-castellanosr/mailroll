@@ -35,13 +35,6 @@ import { discoverCampaigns } from '../discovery/discover-campaigns';
 import { loadTemplatePlugin } from './load-template-plugin';
 import { resolveCc } from './resolve-cc';
 import { FileStateStore } from '../state/file-state-store';
-import {
-  confirmUpgrade,
-  type HistoryInspection,
-  type HistoryPresence,
-  type HistoryUpgrade,
-  inspectHistory,
-} from '../state/history-presence';
 import { SystemSleeper } from '../time/system-sleeper';
 
 export interface RunSelectionOptions {
@@ -66,12 +59,7 @@ export interface TemplateRunResult {
   readonly statePath: string;
   readonly previewDir?: string;
   readonly report: RunReport;
-  readonly history: RunHistory;
 }
-
-export type RunHistory =
-  | { readonly before: HistoryPresence; readonly upgraded: false; readonly unconfirmed?: true }
-  | { readonly before: 'v1'; readonly upgraded: true; readonly backups: readonly string[] };
 
 export async function runSelection(input: SendSelection, options: RunSelectionOptions): Promise<TemplateRunResult[]> {
   const selection = buildSelection(input);
@@ -123,7 +111,7 @@ async function runPrepared(
 ): Promise<TemplateRunResult[]> {
   const now = options.now ?? (() => new Date().toISOString());
   const results: TemplateRunResult[] = [];
-  let current: { readonly target: PreparedTarget; readonly before: HistoryInspection } | undefined;
+  let current: PreparedTarget | undefined;
 
   try {
     for (const target of prepared) {
@@ -131,22 +119,14 @@ async function runPrepared(
         throw new RunCancelledError(`run canceled before ${target.resolved.id} · ${target.resolved.dataFile}`);
       }
 
-      const before = await inspectHistory(target.resolved.statePath);
-
-      current = { target, before };
-      results.push(await runTarget(target, before, selection, options, stateStore, senders, now));
+      current = target;
+      results.push(await runTarget(target, selection, options, stateStore, senders, now));
     }
   } catch (error) {
     const finished = results.length;
 
     if (error instanceof TemplateRunError && current !== undefined) {
-      results.push(
-        resultOf(
-          current.target,
-          error.report,
-          await historyAfter(current.target, current.before, selection, options.logger),
-        ),
-      );
+      results.push(resultOf(current, error.report));
     }
 
     if (results.length === 0) {
@@ -171,7 +151,6 @@ async function runPrepared(
 
 async function runTarget(
   target: PreparedTarget,
-  before: HistoryInspection,
   selection: SendSelection,
   options: RunSelectionOptions,
   stateStore: FileStateStore,
@@ -216,50 +195,10 @@ async function runTarget(
     ...(options.signal !== undefined ? { signal: options.signal } : {}),
   });
 
-  return resultOf(target, report, await historyAfter(target, before, selection, options.logger));
+  return resultOf(target, report);
 }
 
-async function historyAfter(
-  target: PreparedTarget,
-  inspected: HistoryInspection,
-  selection: SendSelection,
-  logger: Logger,
-): Promise<RunHistory> {
-  const before = inspected.presence;
-
-  if (selection.mode.kind !== 'live' || before !== 'v1') {
-    return { before, upgraded: false };
-  }
-
-  let confirmed: HistoryUpgrade;
-
-  try {
-    confirmed = await confirmUpgrade(target.resolved.statePath, inspected);
-  } catch (error) {
-    logger.warn('state.history_check_failed', {
-      templateId: target.resolved.id,
-      dataFile: target.resolved.dataFile,
-      error: error instanceof Error ? error.message : String(error),
-    });
-
-    return { before, upgraded: false, unconfirmed: true };
-  }
-
-  if (!confirmed.upgraded) {
-    return { before, upgraded: false, unconfirmed: true };
-  }
-
-  logger.info('state.history_upgraded', {
-    templateId: target.resolved.id,
-    dataFile: target.resolved.dataFile,
-    statePath: target.resolved.statePath,
-    backups: confirmed.backups.join(', '),
-  });
-
-  return { before, upgraded: true, backups: confirmed.backups };
-}
-
-function resultOf(target: PreparedTarget, report: RunReport, history: RunHistory): TemplateRunResult {
+function resultOf(target: PreparedTarget, report: RunReport): TemplateRunResult {
   return {
     templateId: target.resolved.id,
     dataFile: target.resolved.dataFile,
@@ -267,7 +206,6 @@ function resultOf(target: PreparedTarget, report: RunReport, history: RunHistory
     statePath: target.resolved.statePath,
     ...(target.previewDir !== undefined ? { previewDir: target.previewDir } : {}),
     report,
-    history,
   };
 }
 

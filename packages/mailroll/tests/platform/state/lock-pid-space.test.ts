@@ -133,14 +133,14 @@ describe('a lock left by a process that is no longer running', () => {
   );
 
   it('is refused when it does not record its process space', async () => {
-    const legacy = lockRecord({});
+    const unrecorded = lockRecord({});
 
-    writeFileSync(lockPath, legacy);
+    writeFileSync(lockPath, unrecorded);
 
     expect(await refusal(acquireFileLock(lockPath, 'the list'))).toMatch(
-      /cannot tell whether that process is still running: it does not record the process space it was written in, as is the case for locks written by mailroll 0\.1/,
+      /cannot tell whether that process is still running: it does not record the process space it was written in/,
     );
-    expect(readFileSync(lockPath, 'utf8')).toBe(legacy);
+    expect(readFileSync(lockPath, 'utf8')).toBe(unrecorded);
   });
 
   it('is refused when this run cannot read its own process space, and the lock it takes records none', async () => {

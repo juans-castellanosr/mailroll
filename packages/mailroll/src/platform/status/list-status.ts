@@ -9,14 +9,10 @@ import {
   type StateStore,
   type Template,
   type TemplateState,
-  upgradeTemplateState,
 } from '@mailroll/core';
 import { fileFingerprint } from '../composition/file-fingerprint';
 import { recipientSource } from '../composition/recipient-source';
 import { resolveTemplate } from '../composition/resolve-template';
-import type { HistoryPresence } from '../state/history-presence';
-
-export type HistoryInspector = (statePath: string) => Promise<HistoryPresence>;
 
 export interface ListStatus {
   readonly template: Template;
@@ -25,7 +21,6 @@ export interface ListStatus {
   readonly rejected: readonly SkippedResult[];
   readonly state: TemplateState;
   readonly fingerprint: string;
-  readonly history?: HistoryPresence;
 }
 
 export interface ListCounts {
@@ -55,12 +50,11 @@ export async function loadListStatus(
   dataFile: string,
   prepared: PreparedTemplate,
   store: StateStore,
-  inspect?: HistoryInspector,
 ): Promise<ListStatus> {
   const resolved = resolveTemplate(template, dataFile);
   const fingerprint = await fileFingerprint(resolved.dataPath);
   const listing = await prepared.listRecipients(recipientSource(resolved.dataPath));
-  const state = upgradeTemplateState(await store.load(resolved));
+  const state = await store.load(resolved);
 
   return {
     template,
@@ -69,7 +63,6 @@ export async function loadListStatus(
     rejected: listing.rejected,
     state,
     fingerprint,
-    ...(inspect === undefined ? {} : { history: await inspect(resolved.statePath) }),
   };
 }
 

@@ -235,7 +235,6 @@ acme/onboarding — dry-run
 - The header adds the test inbox in test mode: `acme/onboarding — test (every message to qa@example.com)`.
 - Each list line shows the template, the CSV file, the policy in brackets, then `ok` or `needs attention`, then the counts. In dry-run mode the first count is `rendered`; otherwise it is `sent`. When the provider rejected a CC, the line ends with `, CC rejected on M message(s) (R required)`, counting messages, not addresses.
 - The line below shows `previews:` with the folder when previews were written, or `history:` with the history file in live mode.
-- A line about the history format follows when it applies: `history upgraded to v2; backups: …; older mailroll versions can no longer read it` after a live run upgraded the list, `history upgrade could not be confirmed; check <path> before using an older mailroll` when it could not confirm that, and `history is in the v1 format; the next live run upgrades it to v2 (one-way)` in a dry run or test send.
 
 Each recipient that needs attention gets its own line under its list:
 
@@ -278,8 +277,7 @@ With `--json`, the same information is printed as one JSON object. A dry run wit
         "requiredCcRejectedMessages": 0
       },
       "attention": [],
-      "ccRejected": [],
-      "history": { "before": "none", "upgraded": false }
+      "ccRejected": []
     }
   ]
 }
@@ -318,7 +316,6 @@ With `--json`, the same information is printed as one JSON object. A dry run wit
   - `counts.ccRejectedMessages`, `counts.requiredCcRejectedMessages`: messages accepted for the main recipient whose CC the provider rejected, and those of them whose template required a CC. They count messages, not CC addresses.
   - `attention`: the entries that need attention, each with `address`, `status` and `detail`, plus `attemptId` and, for `cc-rejected`, `providerMessageId` when known.
   - `ccRejected`: one entry per message with a rejected CC, required or optional: `address`, `cc`, `required`, and `attemptId` and `providerMessageId` when known.
-  - `history`: `before` (`"none"`, `"v1"` or `"v2"`), `upgraded`, `backups` when `upgraded` is `true`, and `unconfirmed: true` when a live run could not confirm an upgrade. See [Automation](/guides/automation).
 </ResponseField>
 
 The `status` of an `attention` entry is one of these, and `detail` explains it:

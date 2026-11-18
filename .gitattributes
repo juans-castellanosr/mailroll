@@ -1,7 +1,5 @@
 * text=auto eol=lf
 
-packages/mailroll/tests/fixtures/state-v1/** -text
-
 *.png binary
 *.jpg binary
 *.jpeg binary

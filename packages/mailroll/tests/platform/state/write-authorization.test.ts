@@ -2,15 +2,10 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import {
-  ConfigError,
-  type RecipientJournalEntry,
-  type ResolvedTemplate,
-  type TemplateState,
-  upgradeTemplateState,
-} from '@mailroll/core';
+import { ConfigError, type RecipientJournalEntry, type ResolvedTemplate, type TemplateState } from '@mailroll/core';
 import { FileStateStore } from '../../../src/platform/state/file-state-store';
-import { fixture, listTemplate, stageList } from '../../support/state-v1-fixtures';
+import { JOURNAL_HEADER_LINE } from '../../../src/platform/state/history-format';
+import { listTemplate, stageList } from '../../support/staged-list';
 
 let root: string;
 
@@ -78,8 +73,12 @@ async function refusal(work: Promise<void>): Promise<Error> {
 const lists: readonly (readonly [string, () => ResolvedTemplate])[] = [
   ['a new list whose folder does not exist yet', () => listTemplate(join(root, 'campaign', '.state', 'list.json'))],
   [
-    'a v1 history',
-    () => stageList(root, { snapshot: fixture('snapshot.json'), journal: fixture('journal-mixed.jsonl') }).template,
+    'a v2 history with a torn journal',
+    () =>
+      stageList(root, {
+        snapshot: V2_SNAPSHOT,
+        journal: `${JOURNAL_HEADER_LINE}\n{"email":"a@example.com","sta`,
+      }).template,
   ],
   ['a v2 history', () => stageList(root, { snapshot: V2_SNAPSHOT }).template],
 ];
@@ -132,10 +131,10 @@ describe('writing a list history without the authority to write it', () => {
 
     await store.load(template);
     await store.append(template, intent('a@example.com'));
-    await store.compact(template, upgradeTemplateState(await store.load(template)));
+    await store.compact(template, await store.load(template));
     await lock.release();
 
-    expect(Object.keys(upgradeTemplateState(await new FileStateStore().load(template)).recipients).sort()).toEqual([
+    expect(Object.keys((await new FileStateStore().load(template)).recipients).sort()).toEqual([
       'a@example.com',
       'old@example.com',
     ]);
@@ -290,7 +289,7 @@ describe('writing a list history without the authority to write it', () => {
     await lock.release();
 
     expect(outcomes.map((outcome) => outcome.status)).toEqual(['fulfilled', 'fulfilled', 'fulfilled']);
-    expect(Object.keys(upgradeTemplateState(await new FileStateStore().load(template)).recipients).sort()).toEqual([
+    expect(Object.keys((await new FileStateStore().load(template)).recipients).sort()).toEqual([
       'b@example.com',
       'old@example.com',
       'z@example.com',

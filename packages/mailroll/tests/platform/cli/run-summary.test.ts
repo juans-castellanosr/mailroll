@@ -16,7 +16,6 @@ const clean: TemplateRunResult = {
   dataFile: 'recipients.csv',
   policy: 'pending',
   statePath: 'state.json',
-  history: { before: 'v2', upgraded: false },
   report: {
     total: 1,
     sent: 1,

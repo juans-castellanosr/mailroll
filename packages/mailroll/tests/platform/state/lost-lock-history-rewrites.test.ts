@@ -3,7 +3,7 @@ import type * as FsPromises from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { emptyState, StatePersistenceError, TemplateRunError, upgradeTemplateState } from '@mailroll/core';
+import { emptyState, StatePersistenceError, TemplateRunError } from '@mailroll/core';
 import { FileStateStore } from '../../../src/platform/state/file-state-store';
 import { JOURNAL_HEADER_LINE, serializeSnapshot } from '../../../src/platform/state/history-format';
 import { Checkpoints } from '../../support/concurrency/barrier';
@@ -22,7 +22,6 @@ const ADA = 'ada@example.com';
 const GRACE = 'grace@example.com';
 const ALAN = 'alan@example.org';
 const SNAPSHOT_TEMPORARY = /^recipients\.json\.[0-9a-f-]{36}\.tmp$/;
-const V1_SNAPSHOT = `${JSON.stringify({ version: 1, templateId: 'welcome', recipients: {}, updatedAt: 'T0' })}\n`;
 
 let dir: string;
 let statePath: string;
@@ -103,7 +102,7 @@ async function runAfter(): Promise<void> {
 }
 
 async function statusesOnDisk(): Promise<Readonly<Record<string, string>>> {
-  const recipients = upgradeTemplateState(await new FileStateStore().load(listOfB.template)).recipients;
+  const recipients = (await new FileStateStore().load(listOfB.template)).recipients;
 
   return Object.fromEntries(Object.entries(recipients).map(([email, status]) => [email, status.status]));
 }
@@ -252,20 +251,18 @@ describe('a run whose lock is deleted while it prepares the history for its firs
     );
   });
 
-  it('does not overwrite, with its upgrade of a v1 snapshot, the history of a run that took the list and finished', async () => {
-    seed(V1_SNAPSHOT);
-
-    const beforeUpgrade = interleaver.pauseBefore('A', 'open', 1, (file) => SNAPSHOT_TEMPORARY.test(file));
+  it('does not overwrite, with the first snapshot of a new list, the history of a run that took the list and finished', async () => {
+    const beforeFirstSnapshot = interleaver.pauseBefore('A', 'open', 1, (file) => SNAPSHOT_TEMPORARY.test(file));
     const a = await startA();
 
-    await interleaver.reached(beforeUpgrade);
+    await interleaver.reached(beforeFirstSnapshot);
     rmSync(lockPath());
 
     const b = await startB();
     const failureOfB = await b.finished;
 
     await b.release();
-    interleaver.release(beforeUpgrade);
+    interleaver.release(beforeFirstSnapshot);
 
     const failureOfA = persistenceErrorOf(await a.finished);
 

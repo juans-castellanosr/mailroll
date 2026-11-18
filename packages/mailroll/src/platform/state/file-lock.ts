@@ -299,7 +299,7 @@ function stateOf(record: LockRecord, contender: Contender): OwnerState {
 
 function unverifiableReason(record: LockRecord, own: PidSpace): string | undefined {
   if (record.pidSpace === undefined) {
-    return 'it does not record the process space it was written in, as is the case for locks written by mailroll 0.1 and for files written by a run that could not read its own process space';
+    return 'it does not record the process space it was written in, as is the case for files written by a run that could not read its own process space';
   }
 
   if (own.kind === 'unknown') {

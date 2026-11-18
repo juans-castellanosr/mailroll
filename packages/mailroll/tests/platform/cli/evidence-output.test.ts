@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { Writable } from 'node:stream';
@@ -15,7 +15,6 @@ import { createOutput } from '../../../src/platform/cli/output';
 import { runCli } from '../../../src/platform/cli/program';
 import { connectionEnvKey } from '../../../src/platform/config/resolve-connection-secrets';
 import { dirContents } from '../../support/history-dir';
-import { fixture } from '../../support/state-v1-fixtures';
 
 const CAMPAIGNS = resolve(import.meta.dirname, '../../fixtures/campaigns');
 const SEND = ['send', '-c', 'acme/onboarding', '-t', 'welcome', '--connection', 'outlook-1'];
@@ -142,7 +141,6 @@ interface SummaryList {
   readonly counts: Record<string, number>;
   readonly attention: readonly Record<string, unknown>[];
   readonly ccRejected: readonly Record<string, unknown>[];
-  readonly history: Record<string, unknown>;
 }
 
 function listOf(run: Run): SummaryList {
@@ -301,9 +299,9 @@ describe('the evidence shown by status', () => {
     const list = campaign?.templates[0]?.lists[0];
 
     expect(run.status).toBe(0);
+    expect(list).not.toHaveProperty('history');
     expect(list).toMatchObject({
       dataFile: 'recipients.csv',
-      history: 'v2',
       counts: {
         total: 3,
         sent: 2,
@@ -337,95 +335,48 @@ describe('the evidence shown by status', () => {
   });
 });
 
-describe('the history upgrade from v1', () => {
-  async function v1History(): Promise<string> {
+describe('a history mailroll cannot read', () => {
+  const V1_SNAPSHOT = `${JSON.stringify({ version: 1, templateId: 'welcome', recipients: {}, updatedAt: 'T0' })}\n`;
+
+  async function unsupportedHistory(): Promise<string> {
     const dry = await mailroll([...SEND, '-m', 'dry-run', '--cc', '', '--json']);
     const statePath = listOf(dry).statePath;
 
     mkdirSync(dirname(statePath), { recursive: true });
-    writeFileSync(statePath, fixture('snapshot.json'));
-    writeFileSync(`${statePath}l`, fixture('journal-mixed.jsonl'));
+    writeFileSync(statePath, V1_SNAPSHOT);
 
     return statePath;
   }
 
-  it('warns in a dry run that the next live run upgrades the history, and changes no file', async () => {
-    const statePath = await v1History();
+  it.each([
+    ['a dry run', [...SEND, '-m', 'dry-run', '--cc', '', '--json']],
+    ['a live run', live('--json')],
+  ])('stops %s with an error, calls no provider and changes no file', async (_label, args) => {
+    const statePath = await unsupportedHistory();
     const before = dirContents(dirname(statePath));
-    const json = await mailroll([...SEND, '-m', 'dry-run', '--cc', '', '--json']);
-    const text = await mailroll([...SEND, '-m', 'dry-run', '--cc', '']);
+    const run = await mailroll(args);
 
-    expect(listOf(json).history).toEqual({ before: 'v1', upgraded: false });
-    expect(text.stdout).toContain('history is in the v1 format; the next live run upgrades it to v2 (one-way)');
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toContain(`invalid state file at ${statePath}`);
+    expect(calls).toEqual([]);
     expect(dirContents(dirname(statePath))).toEqual(before);
   });
 
-  it('reports the upgrade only once a live run has completed it, with its backups', async () => {
-    const statePath = await v1History();
-    const run = await mailroll(live('--json'));
+  it('reports the list as a problem in status and exits 1', async () => {
+    const statePath = await unsupportedHistory();
+    const before = dirContents(dirname(statePath));
+    const run = await mailroll(['status', '--json']);
+    const [campaign] = JSON.parse(run.stdout) as { templates: { problem?: string }[] }[];
 
-    expect(listOf(run).history).toEqual({
-      before: 'v1',
-      upgraded: true,
-      backups: [`${statePath}.v1-backup`, `${statePath}l.v1-backup`],
-    });
-    expect(run.stderr).toContain('state.history_upgraded');
-    expect(existsSync(`${statePath}.v1-backup`)).toBe(true);
-
-    const status = await mailroll(['status', '--json']);
-
-    const [campaign] = JSON.parse(status.stdout) as { templates: { lists: { history?: string }[] }[] }[];
-
-    expect(campaign?.templates[0]?.lists[0]?.history).toBe('v2');
-
-    const next = await mailroll(live('--json'));
-
-    expect(listOf(next).history).toEqual({ before: 'v2', upgraded: false });
-    expect(next.stderr).not.toContain('state.history_upgraded');
+    expect(run.status).toBe(1);
+    expect(campaign?.templates[0]?.problem).toContain(`invalid state file at ${statePath}`);
+    expect(dirContents(dirname(statePath))).toEqual(before);
   });
 
-  it('does not announce an upgrade it did not do when an earlier run left it half-done', async () => {
-    const dry = await mailroll([...SEND, '-m', 'dry-run', '--cc', '', '--json']);
-    const statePath = listOf(dry).statePath;
-
-    mkdirSync(dirname(statePath), { recursive: true });
-    writeFileSync(
-      statePath,
-      `${JSON.stringify({ version: 2, templateId: 'welcome', recipients: {}, updatedAt: '2026-01-01T00:00:00.000Z' })}\n`,
-    );
-    writeFileSync(
-      `${statePath}l`,
-      fixture('journal-no-newline.jsonl').replaceAll('kim@example.com', 'zed@example.com'),
-    );
-
-    const run = await mailroll(live('--json'));
-
-    expect(listOf(run).history).toEqual({ before: 'v2', upgraded: false });
-    expect(run.stderr).not.toContain('state.history_upgraded');
-  });
-
-  it('says the upgrade could not be confirmed when the live run could not complete it', async () => {
-    const statePath = await v1History();
-
-    writeFileSync(`${statePath}l`, fixture('journal-invalid-tail.jsonl'));
-
-    const run = await mailroll(live('--json'));
-
-    expect(run.status).not.toBe(0);
-    expect(listOf(run).history).toEqual({ before: 'v1', upgraded: false, unconfirmed: true });
-    expect(run.stderr).not.toContain('state.history_upgraded');
-
-    const text = await mailroll(live());
-
-    expect(text.stdout).toContain(
-      `history upgrade could not be confirmed; check ${statePath} before using an older mailroll`,
-    );
-  });
-
-  it('says a list with no history has none', async () => {
+  it('reports no history field for a list', async () => {
     const run = await mailroll([...SEND, '-m', 'dry-run', '--cc', '', '--json']);
 
-    expect(listOf(run).history).toEqual({ before: 'none', upgraded: false });
+    expect(listOf(run)).not.toHaveProperty('history');
     expect(readdirSync(campaigns).length).toBeGreaterThan(0);
   });
 });

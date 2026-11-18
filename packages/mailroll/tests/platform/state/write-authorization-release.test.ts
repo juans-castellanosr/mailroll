@@ -3,11 +3,11 @@ import type * as FsPromises from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ConfigError, type RecipientJournalEntry, upgradeTemplateState } from '@mailroll/core';
+import { ConfigError, type RecipientJournalEntry } from '@mailroll/core';
 import { FileStateStore } from '../../../src/platform/state/file-state-store';
 import { JOURNAL_HEADER_LINE } from '../../../src/platform/state/history-format';
 import { interleaver } from '../../support/concurrency/fs-interleave';
-import { stageList } from '../../support/state-v1-fixtures';
+import { stageList } from '../../support/staged-list';
 
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof FsPromises>();
@@ -67,10 +67,7 @@ describe('releasing the lock while an authorized write is still running', () => 
     expect(readFileSync(list.journalPath, 'utf8')).toBe(
       `${JOURNAL_HEADER_LINE}\n${JSON.stringify(sent('a@x.co'))}\n${JSON.stringify(sent('b@x.co'))}\n`,
     );
-    expect(Object.keys(upgradeTemplateState(await new FileStateStore().load(list.template)).recipients)).toEqual([
-      'a@x.co',
-      'b@x.co',
-    ]);
+    expect(Object.keys((await new FileStateStore().load(list.template)).recipients)).toEqual(['a@x.co', 'b@x.co']);
   });
 });
 

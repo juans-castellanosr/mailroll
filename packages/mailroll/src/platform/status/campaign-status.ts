@@ -3,13 +3,11 @@ import { loadTemplatePlugin } from '../composition/load-template-plugin';
 import { listTemplateDataFiles } from '../composition/resolve-template';
 import { discoverCampaigns } from '../discovery/discover-campaigns';
 import { type EvidenceItem, type ListCounts, countList, evidenceOf, loadListStatus } from './list-status';
-import { type HistoryPresence, inspectHistory } from '../state/history-presence';
 import { FileStateStore } from '../state/file-state-store';
 
 export interface ListReport {
   readonly dataFile: string;
   readonly counts: ListCounts;
-  readonly history?: HistoryPresence;
   readonly evidence: readonly EvidenceItem[];
 }
 
@@ -32,10 +30,6 @@ export interface CampaignStatusOptions {
 
 export async function getCampaignStatus(options: CampaignStatusOptions): Promise<CampaignReport[]> {
   const store = options.store ?? new FileStateStore();
-  const inspect =
-    options.store === undefined
-      ? async (statePath: string): Promise<HistoryPresence> => (await inspectHistory(statePath)).presence
-      : undefined;
   const campaigns = await discoverCampaigns(options.campaignsRoot);
   const reports: CampaignReport[] = [];
 
@@ -55,12 +49,11 @@ export async function getCampaignStatus(options: CampaignStatusOptions): Promise
         const lists: ListReport[] = [];
 
         for (const file of files) {
-          const list = await loadListStatus(template, file, prepared, store, inspect);
+          const list = await loadListStatus(template, file, prepared, store);
 
           lists.push({
             dataFile: file,
             counts: countList(list),
-            ...(list.history === undefined ? {} : { history: list.history }),
             evidence: evidenceOf(list),
           });
         }

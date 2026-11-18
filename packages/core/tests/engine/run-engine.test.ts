@@ -13,13 +13,7 @@ import type { RunMode } from '../../src/domain/run/run-mode';
 import type { ResendPolicy } from '../../src/domain/run/send-selection';
 import type { SourceRecord } from '../../src/domain/addressing/source-record';
 import type { ResolvedTemplate } from '../../src/domain/catalog/template';
-import {
-  type RecipientJournalEntry,
-  type StoredTemplateState,
-  type TemplateState,
-  type TemplateStateV1,
-  emptyState,
-} from '../../src/domain/run/template-state';
+import { type RecipientJournalEntry, type TemplateState, emptyState } from '../../src/domain/run/template-state';
 import type { ValidationOutcome } from '../../src/domain/kernel/validation-outcome';
 import { runTemplate } from '../../src/engine/run-engine';
 import { TemplateRunError } from '../../src/engine/template-run-error';
@@ -98,13 +92,13 @@ class FakeStateStore implements StateStore {
   readonly appended: RecipientJournalEntry[] = [];
   failAppendAt: number | undefined;
   failCompact = false;
-  constructor(private readonly initial: StoredTemplateState) {}
+  constructor(private readonly initial: TemplateState) {}
 
   lock(): Promise<StateLock> {
     return Promise.resolve({ release: () => Promise.resolve() });
   }
 
-  async load(): Promise<StoredTemplateState> {
+  async load(): Promise<TemplateState> {
     await Promise.resolve();
 
     return this.saved ?? this.initial;
@@ -187,7 +181,7 @@ async function runWith(opts: {
   readonly connectionIds: readonly string[];
   readonly mode?: RunMode;
   readonly policy?: ResendPolicy;
-  readonly initial?: StoredTemplateState;
+  readonly initial?: TemplateState;
   readonly store?: FakeStateStore;
   readonly renderer?: TemplateRenderer<TestRecipient>;
   readonly signal?: AbortSignal;
@@ -247,8 +241,8 @@ describe('runTemplate', () => {
 
   it('pending policy skips recipients already sent per state', async () => {
     const p = new RecordingProvider();
-    const initial: TemplateStateV1 = {
-      version: 1,
+    const initial: TemplateState = {
+      version: 2,
       templateId: 't',
       recipients: { 'a@x.co': { status: 'sent', at: 'old', connectionId: 'x' } },
       updatedAt: 'old',
@@ -419,8 +413,8 @@ describe('runTemplate', () => {
       }
     }
 
-    const initial: TemplateStateV1 = {
-      version: 1,
+    const initial: TemplateState = {
+      version: 2,
       templateId: 't',
       recipients: { 'a@x.co': { status: 'sent', at: 'T0', connectionId: 'x' } },
       updatedAt: 'T0',

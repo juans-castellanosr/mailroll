@@ -135,9 +135,7 @@ function verifyTypes(project: string): void {
     project,
     'consumer',
     [
-      "import { buildSelection, type HistoryPresence, type RunHistory, type TemplateRunResult } from 'mailroll';",
-      "export const upgraded: RunHistory = { before: 'v1', upgraded: true, backups: ['recipients.json.v1-backup'] };",
-      "export const presence: HistoryPresence = 'none';",
+      "import { buildSelection, type FileStateStore, type TemplateRunResult } from 'mailroll';",
       "import { planRun, type ResendPolicy } from 'mailroll/core';",
       "import type * as Facade from 'mailroll/core';",
       `import type * as Core from '${core.name}';`,
@@ -150,7 +148,9 @@ function verifyTypes(project: string): void {
       'export const sameDescriptor: Equal<Facade.IntegrationDescriptor, Core.IntegrationDescriptor> = true;',
       'export const sameError: Equal<typeof Facade.SendError, typeof Core.SendError> = true;',
       'export const samePlan: Equal<typeof Facade.planRun, typeof Core.planRun> = true;',
-      "export const sameHistory: Equal<TemplateRunResult['history'], RunHistory> = true;",
+      "export const loadsCurrent: Equal<Awaited<ReturnType<Core.StateStore['load']>>, Core.TemplateState> = true;",
+      "export const fileLoadsCurrent: Equal<Awaited<ReturnType<FileStateStore['load']>>, Core.TemplateState> = true;",
+      "export const noHistory: Equal<Extract<keyof TemplateRunResult, 'history'>, never> = true;",
     ].join('\n'),
     {
       module: 'nodenext',

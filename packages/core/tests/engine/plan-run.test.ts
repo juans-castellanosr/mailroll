@@ -93,4 +93,23 @@ describe('planRun', () => {
 
     expect(force.assignments.map((a) => a.recipient)).toEqual([C, D]);
   });
+
+  it('failed-only sends only prior failures and holds an uncertain recipient', () => {
+    const plan = planRun({
+      recipients: [A, B, C, D],
+      state: state({
+        ...known.recipients,
+        'd@x.co': { status: 'uncertain', at: 't', connectionId: 'x', message: 'timeout' },
+      }),
+      policy: { kind: 'failed-only' },
+      connectionIds: ['x'],
+    });
+
+    expect(plan.assignments.map((a) => a.recipient)).toEqual([B]);
+    expect(plan.skipped.map((s) => [s.identifier, s.code])).toEqual([
+      [A, 'not-failed'],
+      [C, 'not-failed'],
+      [D, 'held-uncertain'],
+    ]);
+  });
 });

@@ -9,7 +9,6 @@ import {
   type RecipientStatus,
   StatePersistenceError,
   TemplateRunError,
-  upgradeTemplateState,
 } from '@mailroll/core';
 import { FileStateStore } from '../../../src/platform/state/file-state-store';
 import { Checkpoints } from '../../support/concurrency/barrier';
@@ -194,7 +193,7 @@ describe('a live run whose lock is deleted and taken by another run around the w
 
       const summary = ledger.summary();
       const graceCalls = ledger.calls().filter((call) => call.to === GRACE);
-      const history = upgradeTemplateState(await new FileStateStore().load(list.template));
+      const history = await new FileStateStore().load(list.template);
 
       expect(summary.accidentalDuplicates).toEqual([]);
       expect(failureOfB).toBeUndefined();
@@ -241,9 +240,7 @@ describe('a lock file that cannot be read right after a send intent is written',
       `was written to the send state of "welcome" · recipients.csv, but right after it this run could no longer confirm that it holds its lock (its lock file could not be read to confirm this run still owns it); nothing was sent to ${GRACE}`,
     );
     expect(failure instanceof Error ? failure.cause : undefined).toBeInstanceOf(Error);
-    expect(upgradeTemplateState(await new FileStateStore().load(list.template)).recipients[GRACE]?.status).toBe(
-      'uncertain',
-    );
+    expect((await new FileStateStore().load(list.template)).recipients[GRACE]?.status).toBe('uncertain');
 
     rmSync(lockPath, { recursive: true });
     writeFileSync(lockPath, ours);

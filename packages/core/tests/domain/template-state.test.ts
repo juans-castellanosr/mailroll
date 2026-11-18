@@ -34,7 +34,7 @@ describe('settleStatus', () => {
   });
 });
 
-describe('settleStatus, every previous status against every outcome (v1 rules, including the two that drop the earlier record)', () => {
+describe('settleStatus, every previous status against every outcome (status rules, including the two that drop the earlier record)', () => {
   const olderFailure = {
     at: 'T1',
     connectionId: 'x',

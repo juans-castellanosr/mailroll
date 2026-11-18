@@ -7,15 +7,13 @@ import {
   type RecipientJournalEntry,
   type ResolvedTemplate,
   type StateStore,
-  type StoredTemplateState,
   type TemplateState,
-  upgradeTemplateState,
 } from '@mailroll/core';
 import { isEnoent } from '../fs/is-enoent';
 import { appendDurably, type Fence, removeFile, replaceFile, syncDirectory } from './durable-files';
 import { type AcquiredLock, acquireFileLock, isLockStillHeld } from './file-lock';
 import { journalPathFor, serializeEntry, serializeSnapshot } from './history-format';
-import { prepareHistoryForWrite, readHistoryFiles } from './history-upgrade';
+import { prepareHistoryForWrite, readHistoryFiles } from './history-files';
 
 interface WriteSession {
   readonly lock: AcquiredLock;
@@ -71,17 +69,17 @@ export class FileStateStore implements StateStore {
   private readonly sessions = new Map<string, WriteSession>();
   private readonly queues = new Map<string, Promise<void>>();
 
-  async load(template: ResolvedTemplate): Promise<StoredTemplateState> {
+  async load(template: ResolvedTemplate): Promise<TemplateState> {
     const session = this.sessions.get(template.statePath);
     const { snapshot, journal } = await readHistoryFiles(template.statePath);
-    const base = snapshot.kind === 'absent' ? emptyState(template.id) : upgradeTemplateState(snapshot.state);
+    const base = snapshot.kind === 'absent' ? emptyState(template.id) : snapshot.state;
     const replayed = foldJournal(base, journal.kind === 'absent' ? [] : journal.entries);
 
     if (session !== undefined && this.sessions.get(template.statePath) === session) {
       session.loaded = true;
     }
 
-    return snapshot.kind === 'v1' ? { ...replayed, version: 1 } : replayed;
+    return replayed;
   }
 
   append(template: ResolvedTemplate, entry: RecipientJournalEntry): Promise<void> {
@@ -252,7 +250,6 @@ export class FileStateStore implements StateStore {
       statePath: template.statePath,
       templateId: template.id,
       purpose,
-      locked: true,
       fence: this.fenceFor(session, (refusal) => lostWhilePreparing(template, refusal)),
     });
   }

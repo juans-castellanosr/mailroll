@@ -9,9 +9,7 @@ import {
   type ResolvedTemplate,
   type StateLock,
   type StateStore,
-  type StoredTemplateState,
   type TemplateState,
-  upgradeTemplateState,
 } from '@mailroll/core';
 import { FileStateStore } from '../../../src/platform/state/file-state-store';
 import { deferred } from '../../support/concurrency/barrier';
@@ -44,7 +42,7 @@ class BothPlanBeforeWriting implements StateStore {
     this.firstWrote.resolve();
   }
 
-  async load(template: ResolvedTemplate): Promise<StoredTemplateState> {
+  async load(template: ResolvedTemplate): Promise<TemplateState> {
     const state = await this.inner.load(template);
 
     this.loads += 1;
@@ -124,9 +122,11 @@ describe('C6 — two live runTemplate calls on one store instance and one lock',
 
     expect(ledger.summary().callsPerRecipient).toEqual(ONE_EACH);
     expect(ledger.summary().accidentalDuplicates).toEqual([]);
-    expect(
-      Object.values(upgradeTemplateState(await store.load(list.template)).recipients).map((s) => s.status),
-    ).toEqual(['sent', 'sent', 'sent']);
+    expect(Object.values((await store.load(list.template)).recipients).map((s) => s.status)).toEqual([
+      'sent',
+      'sent',
+      'sent',
+    ]);
   });
 });
 
@@ -146,7 +146,7 @@ describe('C7 — two first writes at once on one FileStateStore instance', () =>
     await lock.release();
 
     expect(settled.map((outcome) => outcome.status)).toEqual(['fulfilled', 'fulfilled']);
-    expect(Object.keys(upgradeTemplateState(await new FileStateStore().load(list.template)).recipients)).toEqual([
+    expect(Object.keys((await new FileStateStore().load(list.template)).recipients)).toEqual([
       'ada@example.com',
       'grace@example.com',
     ]);

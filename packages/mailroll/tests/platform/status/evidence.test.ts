@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { type EmailAddress, parseEmailAddress, type RecipientStatus, type TemplateState } from '@mailroll/core';
-import { describeStatus, evidenceOf, type ListStatus } from '../../../src/platform/status/list-status';
-import { listTemplate } from '../../support/state-v1-fixtures';
+import {
+  countList,
+  describeStatus,
+  evidenceOf,
+  formatCounts,
+  type ListStatus,
+} from '../../../src/platform/status/list-status';
+import { listTemplate } from '../../support/staged-list';
 
 function address(raw: string): EmailAddress {
   const parsed = parseEmailAddress(raw);
@@ -75,5 +81,38 @@ describe('evidence in status', () => {
       }),
     ).toBe('sent 2026-01-01 (CC rejected, required: a@x.co)');
     expect(describeStatus(RECORDS['ccok@x.co'])).toBe('sent T1');
+  });
+
+  it('counts each list by status, with pending as the recipients neither sent nor uncertain', () => {
+    expect(countList(list)).toEqual({
+      total: 8,
+      sent: 5,
+      failed: 1,
+      uncertain: 1,
+      pending: 2,
+      rejected: 0,
+      ccRejectedMessages: 1,
+      requiredCcRejectedMessages: 0,
+    });
+    expect(formatCounts(countList(list))).toBe(
+      '8 in list · sent 5 · failed 1 · pending 2 · uncertain 1 · CC rejected 1 (0 required)',
+    );
+  });
+
+  it('describes each status, including a later resend that failed or is uncertain', () => {
+    expect(describeStatus(RECORDS['resend@x.co'])).toBe('sent T1 (a later resend is uncertain)');
+    expect(
+      describeStatus({
+        status: 'sent',
+        at: '2026-01-10T10:00:01.000Z',
+        connectionId: C,
+        resendFailure: { at: 'T2', connectionId: C, outcome: 'failed', message: 'm', category: 'transient' },
+      }),
+    ).toBe('sent 2026-01-10 (a later resend failed)');
+    expect(describeStatus(RECORDS['failed@x.co'])).toBe('failed T1 (permanent)');
+    expect(describeStatus(RECORDS['unsure@x.co'])).toBe(
+      'UNCERTAIN T1 — may have been delivered; check before resending',
+    );
+    expect(describeStatus(RECORDS['new@x.co'])).toBe('not sent yet');
   });
 });

@@ -200,17 +200,8 @@ interface TemplateRunResult {
   statePath: string; // snapshot file; only live runs write it
   previewDir?: string; // dry runs with previewDir only
   report: RunReport;
-  history: RunHistory;
 }
-
-type RunHistory =
-  | { before: HistoryPresence; upgraded: false; unconfirmed?: true }
-  | { before: 'v1'; upgraded: true; backups: readonly string[] };
-
-type HistoryPresence = 'none' | 'v1' | 'v2';
 ```
-
-`history` tells you the format of the list's history when the list started (`before`) and whether this run upgraded it from the format of mailroll 0.1. `upgraded` is `true` only after a live run found the v2 snapshot and the backups on disk; `unconfirmed` marks a live run of a v1 list whose upgrade could not be confirmed. `RunHistory` and `HistoryPresence` are exported as types from `mailroll`. See [Upgrade from the v1 format](/reference/files#upgrade-from-the-v1-format).
 
 The `report` accounts for every row of the CSV and every requested subset address:
 
@@ -387,23 +378,23 @@ for (const campaign of campaigns) {
 - It loads each template's plugin to validate the rows, so a plugin that fails shows up as that template's `problem` instead of failing the whole call. A template without a CSV has the problem `no CSV in data/`.
 - An invalid campaign or template configuration still throws, because the campaigns cannot be loaded at all.
 - `counts` has `total` (rows the validator accepted), `sent`, `failed`, `uncertain`, `pending`, `rejected`, `ccRejectedMessages` and `requiredCcRejectedMessages`. `pending` is `total − sent − uncertain`, so failed recipients count as pending: the `pending` policy would send to them again.
-- Each list also has `evidence`, the history entries that need tracing, and `history` (`"none"`, `"v1"` or `"v2"`). See [`mailroll status`](/cli/status#json-output).
-- The optional `store` option replaces the file-based history with your own `StateStore`. `history` is then absent, because mailroll cannot know how your store keeps its files.
+- Each list also has `evidence`, the history entries that need tracing. See [`mailroll status`](/cli/status#json-output).
+- The optional `store` option replaces the file-based history with your own `StateStore`.
 
 ## History stores
 
 A `StateStore` keeps the history of each list. mailroll ships two:
 
-- `FileStateStore` writes the [state files](/reference/files#state-files). It reads histories written by mailroll 0.1, and upgrades one to v2 at its first write. `runSelection` takes the locks for you. When you call `FileStateStore` directly, every write must come from the instance that holds the list's lock and loaded the list after taking it: call `lock(template)`, run the list with `runTemplate` (which loads it), and call `release()` on the lock in a `finally` block. Any other write, or a write after the lock file was deleted, taken over or could not be read, is refused and writes nothing. Called directly, `append` and `compact` throw that refusal as `ConfigError`; inside `runTemplate`, and so `runSelection`, it reaches you as the `cause` of a `StatePersistenceError` whose message starts with `could not record send state`. See [Errors](/sdk/errors). It needs a file system with hard links, for its locks as well as its history.
+- `FileStateStore` writes the [state files](/reference/files#state-files). `runSelection` takes the locks for you. When you call `FileStateStore` directly, every write must come from the instance that holds the list's lock and loaded the list after taking it: call `lock(template)`, run the list with `runTemplate` (which loads it), and call `release()` on the lock in a `finally` block. Any other write, or a write after the lock file was deleted, taken over or could not be read, is refused and writes nothing. Called directly, `append` and `compact` throw that refusal as `ConfigError`; inside `runTemplate`, and so `runSelection`, it reaches you as the `cause` of a `StatePersistenceError` whose message starts with `could not record send state`. See [Errors](/sdk/errors). It needs a file system with hard links, for its locks as well as its history.
 - `MemoryStateStore`, from `mailroll/core`, keeps everything in memory.
 
 With any store, `runTemplate` refuses a second live run of the same list on the same store instance while the first is still running, with `ConfigError` and nothing sent.
 
 A store of your own implements four methods:
 
-- `load(template)` returns a `StoredTemplateState`: a v2 `TemplateState`, or a `TemplateStateV1` you stored before 0.2. Callers that need a `TemplateState` pass the result to `upgradeTemplateState`, which copies a v1 state as it is and never invents evidence.
+- `load(template)` returns the list's `TemplateState`.
 - `append(template, entry)` stores one journal entry.
-- `compact(template, state)` receives a v2 `TemplateState` and replaces the stored history with it.
+- `compact(template, state)` receives a `TemplateState` and replaces the stored history with it.
 - `lock(template)` gives one run exclusive use of the list.
 
 `foldJournal(snapshot, entries)` replays journal entries over a snapshot exactly as mailroll's own stores do, including turning interrupted intents into uncertain entries:
@@ -416,7 +407,6 @@ import {
   type ResolvedTemplate,
   type StateLock,
   type StateStore,
-  type StoredTemplateState,
   type TemplateState,
 } from 'mailroll';
 
@@ -424,7 +414,7 @@ export class SimpleHistoryStore implements StateStore {
   private readonly snapshots = new Map<string, TemplateState>();
   private readonly journals = new Map<string, RecipientJournalEntry[]>();
 
-  load(template: ResolvedTemplate): Promise<StoredTemplateState> {
+  load(template: ResolvedTemplate): Promise<TemplateState> {
     const snapshot = this.snapshots.get(template.statePath) ?? emptyState(template.id);
 
     return Promise.resolve(foldJournal(snapshot, this.journals.get(template.statePath) ?? []));

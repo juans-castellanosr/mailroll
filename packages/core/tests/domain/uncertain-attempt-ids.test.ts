@@ -57,7 +57,7 @@ const PREVIOUS: readonly (readonly [string, RecipientStatus | undefined])[] = [
   ['U(A)', uncertain('A')],
   ['U(A), rf F(B)', withResend(uncertain('A'), failed('B'))],
   ['U(A) [Z]', { ...uncertain('A'), uncertainAttemptIds: ['Z'] }],
-  ['U without id (v1)', uncertain()],
+  ['U without id', uncertain()],
 ];
 
 const EXPECTED_HISTORY: Readonly<Record<string, readonly [unknown, unknown, unknown]>> = {
@@ -69,7 +69,7 @@ const EXPECTED_HISTORY: Readonly<Record<string, readonly [unknown, unknown, unkn
   'U(A)': [['A'], undefined, ['A']],
   'U(A), rf F(B)': [['A'], undefined, ['A']],
   'U(A) [Z]': [['Z', 'A'], ['Z'], ['Z', 'A']],
-  'U without id (v1)': [undefined, undefined, undefined],
+  'U without id': [undefined, undefined, undefined],
 };
 
 describe('uncertainAttemptIds (D6)', () => {
@@ -81,7 +81,7 @@ describe('uncertainAttemptIds (D6)', () => {
     expect(historyOf(settleStatus(previous, uncertain('C')))).toEqual(afterUncertain);
   });
 
-  it.each(PREVIOUS)('decides the status exactly as the v1 rule does, whatever the ids: %s', (_label, previous) => {
+  it.each(PREVIOUS)('decides the status exactly as the id-free rule does, whatever the ids: %s', (_label, previous) => {
     const strip = (status: RecipientStatus | undefined): unknown =>
       status === undefined
         ? undefined

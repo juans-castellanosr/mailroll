@@ -101,7 +101,7 @@ function scaffold(templates: readonly TemplateFixture[], connections: readonly s
 
       write(
         statePath(t, file),
-        JSON.stringify({ version: 1, templateId: t.id, recipients, updatedAt: '2026-10-01T00:00:00.000Z' }),
+        JSON.stringify({ version: 2, templateId: t.id, recipients, updatedAt: '2026-10-01T00:00:00.000Z' }),
       );
     }
   }
